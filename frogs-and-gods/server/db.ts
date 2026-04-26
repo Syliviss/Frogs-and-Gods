@@ -17,6 +17,7 @@ import {
   type InsertEncounter,
   type InsertFrog,
   type InsertGod,
+  type InsertLoot,
   type InsertParty,
   type InsertWorldLogEvent,
   type Party,
@@ -311,4 +312,61 @@ export async function getFrogInventory(frogId: number) {
   const db = await getDb();
   if (!db) return [];
   return db.select().from(frogInventory).where(eq(frogInventory.frogId, frogId));
+}
+
+// ─────────────────────────────────────────────
+// ADMIN HELPERS
+// ─────────────────────────────────────────────
+
+export async function listAllUsers() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(users);
+}
+
+export async function setUserRole(userId: number, role: "frog" | "god" | "admin"): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.update(users).set({ role }).where(eq(users.id, userId));
+}
+
+export async function listAllFrogs() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(frogs);
+}
+
+export async function listAllGods() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(gods);
+}
+
+export async function listAllLoot() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(loot).orderBy(loot.tier);
+}
+
+export async function countLoot(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const result = await db.select().from(loot);
+  return result.length;
+}
+
+export async function bulkInsertLoot(items: InsertLoot[]): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  for (const item of items) {
+    await db.insert(loot).values(item);
+  }
+}
+
+export async function createUserWithOpenId(openId: string, name: string): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.insert(users).values({ openId, name, role: "frog", lastSignedIn: new Date() });
+  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+  return result[0]!.id;
 }

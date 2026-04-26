@@ -4,16 +4,12 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import Home from "./pages/Home";
-import FrogDashboard from "./pages/FrogDashboard";
-import GodView from "./pages/GodView";
+import Admin from "./pages/Admin";
 
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={Home} />
-      <Route path="/frog-dashboard" component={FrogDashboard} />
-      <Route path="/god-view" component={GodView} />
+      <Route path="/" component={Admin} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>
