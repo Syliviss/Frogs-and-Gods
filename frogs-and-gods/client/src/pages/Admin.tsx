@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useWorldLog } from "@/hooks/useWorldLog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -743,6 +744,87 @@ function WorldLogTab() {
 }
 
 // ─────────────────────────────────────────────
+// UX TESTING DROPDOWN
+// ─────────────────────────────────────────────
+
+function UxTestingDropdown() {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div
+      style={{ position: "relative", display: "inline-block" }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <div
+        style={{
+          padding: "6px 12px",
+          fontSize: 13,
+          fontFamily: "'Cinzel', serif",
+          color: open ? "#fde68a" : "#9ca3af",
+          cursor: "default",
+          letterSpacing: "0.05em",
+          userSelect: "none",
+          borderRadius: 6,
+          background: open ? "#0f1929" : "transparent",
+          transition: "color 0.15s, background 0.15s",
+          whiteSpace: "nowrap",
+        }}
+      >
+        USER EXPERIENCE TESTING ▾
+      </div>
+
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            zIndex: 50,
+            background: "#0a1120",
+            border: "1px solid #1e2a3a",
+            borderRadius: 8,
+            minWidth: 200,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+            overflow: "hidden",
+          }}
+        >
+          <Link href="/testing-ground">
+            <div
+              style={{
+                padding: "10px 16px",
+                fontSize: 13,
+                color: "#e2e8f0",
+                cursor: "pointer",
+                borderBottom: "1px solid #1e2a3a",
+                fontFamily: "'Cinzel', serif",
+                letterSpacing: "0.04em",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#0f1929")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              TESTING GROUND
+            </div>
+          </Link>
+          <div
+            style={{
+              padding: "10px 16px",
+              fontSize: 13,
+              color: "#4b5563",
+              cursor: "not-allowed",
+              fontFamily: "'Cinzel', serif",
+              letterSpacing: "0.04em",
+            }}
+          >
+            COMING SOON
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // ROOT ADMIN PANEL
 // ─────────────────────────────────────────────
 
@@ -768,20 +850,22 @@ export default function Admin() {
         </div>
 
         <Tabs defaultValue="frogs">
-          <TabsList
-            style={{
-              background: "#0a1120",
-              border: "1px solid #1e2a3a",
-              marginBottom: 20,
-            }}
-          >
-            <TabsTrigger value="users">Users</TabsTrigger>
-            <TabsTrigger value="frogs">Frogs</TabsTrigger>
-            <TabsTrigger value="gods">Gods</TabsTrigger>
-            <TabsTrigger value="combat">Combat</TabsTrigger>
-            <TabsTrigger value="loot">Loot</TabsTrigger>
-            <TabsTrigger value="log">World Log</TabsTrigger>
-          </TabsList>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 20, gap: 8 }}>
+            <TabsList
+              style={{
+                background: "#0a1120",
+                border: "1px solid #1e2a3a",
+              }}
+            >
+              <TabsTrigger value="users">Users</TabsTrigger>
+              <TabsTrigger value="frogs">Frogs</TabsTrigger>
+              <TabsTrigger value="gods">Gods</TabsTrigger>
+              <TabsTrigger value="combat">Combat</TabsTrigger>
+              <TabsTrigger value="loot">Loot</TabsTrigger>
+              <TabsTrigger value="log">World Log</TabsTrigger>
+            </TabsList>
+            <UxTestingDropdown />
+          </div>
 
           <div
             style={{
