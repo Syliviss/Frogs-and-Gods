@@ -1,4 +1,8 @@
+import dotenv from "dotenv";
+import { fileURLToPath } from "url";
 import { defineConfig } from "drizzle-kit";
+
+dotenv.config({ path: fileURLToPath(new URL(".env", import.meta.url)) });
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {

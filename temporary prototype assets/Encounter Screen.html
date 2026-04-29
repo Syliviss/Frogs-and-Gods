@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Frogs & Gods — Encounter</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #080c0e;
+    font-family: 'Share Tech Mono', monospace;
+  }
+
+  /* ── Scene layers ── */
+  #scene {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+  }
+
+  /* Sky — stormy but with a warm sun break top-center */
+  #sky {
+    flex: 0 0 44%;
+    position: relative;
+    overflow: hidden;
+    background:
+      radial-gradient(ellipse 55% 60% at 52% -10%,
+        rgba(200,160,80,0.22) 0%,
+        rgba(160,120,60,0.10) 35%,
+        transparent 70%),
+      linear-gradient(180deg,
+        #0e1218 0%,
+        #141e28 30%,
+        #18242e 60%,
+        #131d22 100%);
+  }
+
+  /* Sun glow disk */
+  #sun-glow {
+    position: absolute;
+    top: -30px; left: 50%;
+    transform: translateX(-50%);
+    width: 220px; height: 120px;
+    background: radial-gradient(ellipse at 50% 30%,
+      rgba(220,170,80,0.28) 0%,
+      rgba(180,130,60,0.12) 40%,
+      transparent 75%);
+    filter: blur(12px);
+    pointer-events: none;
+  }
+
+  /* Cloud strips — slightly lighter than landing page */
+  .cloud {
+    position: absolute;
+    image-rendering: pixelated;
+  }
+
+  /* Pixel treeline */
+  #treeline {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 80px;
+  }
+
+  /* Water / bog */
+  #water {
+    flex: 0 0 16%;
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(180deg,
+      #0f1e1a 0%,
+      #0c1814 60%,
+      #081210 100%);
+  }
+
+  /* Sun shimmer on water */
+  #water-shimmer {
+    position: absolute;
+    top: 0; left: 30%; width: 40%; height: 100%;
+    background: linear-gradient(180deg,
+      rgba(180,140,60,0.10) 0%,
+      rgba(160,120,50,0.04) 60%,
+      transparent 100%);
+    pointer-events: none;
+  }
+
+  /* Ground */
+  #ground {
+    flex: 1;
+    background: linear-gradient(180deg, #130e09 0%, #0d0a06 100%);
+    position: relative;
+  }
+
+  /* Scanlines */
+  #scene::after {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg, transparent, transparent 3px,
+      rgba(0,0,0,0.11) 4px
+    );
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  /* Pixel grid */
+  #scene::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.01) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.01) 1px, transparent 1px);
+    background-size: 8px 8px;
+    pointer-events: none;
+    z-index: 99;
+  }
+
+  /* Fog ribbons */
+  .fog-ribbon {
+    position: absolute;
+    left: -10%; width: 120%;
+    filter: blur(16px);
+    pointer-events: none;
+  }
+
+  /* Water ripples */
+  .ripple {
+    position: absolute;
+    height: 2px;
+    background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(60,120,100,0.12) 30%,
+      rgba(80,140,110,0.20) 50%,
+      rgba(60,120,100,0.12) 70%,
+      transparent 100%);
+    animation: ripple-move linear infinite;
+  }
+  @keyframes ripple-move {
+    from { transform: translateX(-8px); opacity: 0.5; }
+    50%  { opacity: 1; }
+    to   { transform: translateX(8px); opacity: 0.5; }
+  }
+
+  /* Rain */
+  #rain-canvas {
+    position: fixed; inset: 0;
+    pointer-events: none;
+    z-index: 97;
+    opacity: 0.22;
+  }
+
+  /* ── UI Layer ── */
+  #ui {
+    position: fixed; inset: 0;
+    display: flex;
+    flex-direction: column;
+    z-index: 50;
+  }
+
+  /* Scene area — NPC + environment */
+  #encounter-scene {
+    flex: 1;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 24px;
+    position: relative;
+  }
+
+  /* NPC name plate */
+  #npc-name {
+    position: absolute;
+    top: 18px; left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+  }
+
+  .npc-title {
+    font-family: 'VT323', monospace;
+    font-size: clamp(22px, 3.5vw, 36px);
+    letter-spacing: 0.1em;
+    color: #b07a3a;
+    text-shadow: 0 0 14px rgba(180,120,40,0.5), 0 0 40px rgba(140,90,20,0.25);
+    white-space: nowrap;
+  }
+
+  .npc-sub {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: #6a5030;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  /* NPC sprite placeholder */
+  .npc-sprite {
+    image-rendering: pixelated;
+    background:
+      repeating-conic-gradient(#0d140f 0% 25%, #0f180d 25% 50%) 0 0 / 8px 8px;
+    border: 2px solid #3a5a30;
+    box-shadow:
+      0 0 30px rgba(100,150,60,0.15),
+      0 -12px 40px rgba(180,120,40,0.08),
+      0 8px 24px rgba(0,0,0,0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .sprite-label {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 9px;
+    color: #2a4a25;
+    text-align: center;
+    letter-spacing: 0.1em;
+  }
+
+  /* ── Dialogue box ── */
+  #dialogue-box {
+    background: rgba(6, 10, 8, 0.96);
+    border-top: 2px solid #2a4a30;
+    padding: 18px 24px 20px;
+    box-shadow: 0 -6px 40px rgba(0,0,0,0.9);
+    position: relative;
+  }
+
+  /* Sun color leak into dialogue top edge */
+  #dialogue-box::before {
+    content: '';
+    position: absolute;
+    top: -1px; left: 10%; right: 10%;
+    height: 1px;
+    background: linear-gradient(90deg,
+      transparent,
+      rgba(180,130,50,0.3) 30%,
+      rgba(200,150,60,0.4) 50%,
+      rgba(180,130,50,0.3) 70%,
+      transparent);
+  }
+
+  #speech-area {
+    border: 1px solid #1e3a24;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    background: rgba(8,14,10,0.5);
+    min-height: 72px;
+    position: relative;
+  }
+
+  .speaker-name {
+    font-family: 'VT323', monospace;
+    font-size: 18px;
+    color: #8a6a30;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+  }
+
+  .speech-text {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: clamp(10px, 1.4vw, 13px);
+    color: #7aaa88;
+    line-height: 1.65;
+  }
+
+  .cursor-blink {
+    display: inline-block;
+    font-family: 'VT323', monospace;
+    font-size: 20px;
+    color: #4a7a50;
+    vertical-align: bottom;
+    animation: blink 1.1s step-start infinite;
+    margin-left: 2px;
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  /* Choice buttons */
+  #choices {
+    display: flex;
+    gap: 10px;
+  }
+
+  .choice-btn {
+    flex: 1;
+    border: 2px solid;
+    padding: 10px 8px;
+    font-family: 'VT323', monospace;
+    font-size: clamp(14px, 2vw, 19px);
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    text-align: center;
+    cursor: pointer;
+    transition: background 0.1s, box-shadow 0.12s, transform 0.07s;
+    position: relative;
+    white-space: nowrap;
+  }
+
+  .choice-btn::after {
+    content: '';
+    position: absolute;
+    top: 3px; left: 3px; right: 3px; bottom: 3px;
+    border: 1px solid;
+    opacity: 0.2;
+    pointer-events: none;
+  }
+
+  .btn-green {
+    border-color: #4a7e55;
+    color: #7aaa80;
+    background: rgba(20,50,28,0.5);
+    box-shadow: 0 0 10px rgba(60,130,75,0.18), 4px 4px 0 #000;
+  }
+  .btn-green::after { border-color: #4a7e55; }
+  .btn-green:hover {
+    background: rgba(28,60,34,0.7);
+    box-shadow: 0 0 22px rgba(80,160,95,0.28), 4px 4px 0 #000;
+    transform: translateY(-2px);
+    color: #9acc9a;
+  }
+  .btn-green:active { transform: translateY(1px); }
+
+  .btn-amber {
+    border-color: #7a5a28;
+    color: #b08040;
+    background: rgba(40,28,10,0.5);
+    box-shadow: 0 0 10px rgba(140,100,30,0.18), 4px 4px 0 #000;
+  }
+  .btn-amber::after { border-color: #7a5a28; }
+  .btn-amber:hover {
+    background: rgba(54,36,12,0.7);
+    box-shadow: 0 0 22px rgba(180,130,40,0.28), 4px 4px 0 #000;
+    transform: translateY(-2px);
+    color: #d0a060;
+  }
+  .btn-amber:active { transform: translateY(1px); }
+
+  .btn-dim {
+    border-color: #2a3a2e;
+    color: #3a5a40;
+    background: rgba(10,18,12,0.5);
+    box-shadow: 2px 2px 0 #000;
+  }
+  .btn-dim::after { border-color: #2a3a2e; }
+  .btn-dim:hover {
+    background: rgba(16,26,18,0.7);
+    color: #4a6a50;
+    transform: translateY(-2px);
+  }
+  .btn-dim:active { transform: translateY(1px); }
+
+  /* HUD strip top */
+  #hud-top {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    display: flex;
+    align-items: center;
+    padding: 8px 16px;
+    gap: 16px;
+    background: rgba(4,8,6,0.85);
+    border-bottom: 1px solid #1a2e20;
+    z-index: 60;
+  }
+
+  .bar-wrap { display: flex; flex-direction: column; gap: 3px; }
+  .bar-label { font-size: 9px; color: #3a5a40; letter-spacing: 0.1em; }
+  .bar-track {
+    height: 8px;
+    background: #080e0a;
+    border: 1px solid #1a2e1a;
+  }
+  .bar-fill-green {
+    height: 100%;
+    background: linear-gradient(90deg, #1a6a38, #5aaa70);
+    box-shadow: 0 0 5px rgba(80,160,100,0.5);
+  }
+  .bar-fill-amber {
+    height: 100%;
+    background: linear-gradient(90deg, #7a5010, #c08030);
+    box-shadow: 0 0 5px rgba(180,120,40,0.5);
+  }
+
+  .hud-char {
+    font-family: 'VT323', monospace;
+    font-size: 16px;
+    color: #5a8a60;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+  }
+
+  .hud-spacer { flex: 1; }
+
+  .hud-loc {
+    font-family: 'VT323', monospace;
+    font-size: 16px;
+    color: #3a5a3a;
+    letter-spacing: 0.1em;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 600px) {
+    #choices { flex-direction: column; gap: 8px; }
+    .choice-btn { font-size: 15px; }
+    .npc-title { font-size: 22px; }
+    #dialogue-box { padding: 12px 14px 14px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Background scene -->
+<div id="scene">
+  <div id="sky">
+    <div id="sun-glow"></div>
+    <!-- Clouds — slightly lighter, sun-touched edges -->
+    <div class="cloud" style="top:8%;left:4%;width:22%;height:24px;background:#1e2e3c;opacity:0.75;box-shadow:0 8px 0 #18262e, 0 -4px 0 #283848;"></div>
+    <div class="cloud" style="top:5%;left:26%;width:28%;height:32px;background:#222e3c;opacity:0.65;box-shadow:0 8px 0 #1a2834;"></div>
+    <!-- Sun-lit cloud edges center -->
+    <div class="cloud" style="top:3%;left:38%;width:24%;height:16px;background:#2a3840;opacity:0.5;box-shadow:0 -4px 0 #3a4a30;"></div>
+    <div class="cloud" style="top:14%;left:55%;width:26%;height:22px;background:#1e2c38;opacity:0.6;box-shadow:0 8px 0 #16222e;"></div>
+    <div class="cloud" style="top:18%;left:74%;width:20%;height:18px;background:#1a2830;opacity:0.5;"></div>
+    <div class="cloud" style="top:10%;left:0%;width:12%;height:14px;background:#18242c;opacity:0.45;"></div>
+    <!-- Treeline -->
+    <svg id="treeline" viewBox="0 0 800 80" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="0"   y="28" width="8"  height="52" fill="#0a0f0c"/>
+      <rect x="4"   y="18" width="10" height="12" fill="#0a0f0c"/>
+      <rect x="3"   y="12" width="12" height="8"  fill="#0b120e" opacity="0.7"/>
+      <rect x="22"  y="34" width="7"  height="46" fill="#090e0b"/>
+      <rect x="20"  y="22" width="11" height="14" fill="#090e0b"/>
+      <rect x="62"  y="18" width="10" height="62" fill="#0b100d"/>
+      <rect x="56"  y="10" width="14" height="10" fill="#0b100d"/>
+      <rect x="55"  y="5"  width="16" height="6"  fill="#0c120e" opacity="0.6"/>
+      <rect x="122" y="26" width="8"  height="54" fill="#0a0f0c"/>
+      <rect x="118" y="16" width="16" height="12" fill="#0a0f0c"/>
+      <rect x="182" y="12" width="10" height="68" fill="#0b100d"/>
+      <rect x="176" y="5"  width="16" height="8"  fill="#0b100d"/>
+      <rect x="242" y="30" width="7"  height="50" fill="#090e0b"/>
+      <rect x="302" y="20" width="9"  height="60" fill="#0b100d"/>
+      <rect x="298" y="12" width="17" height="10" fill="#0b100d"/>
+      <rect x="362" y="26" width="8"  height="54" fill="#0a0f0c"/>
+      <rect x="422" y="14" width="10" height="66" fill="#0b100d"/>
+      <rect x="418" y="6"  width="14" height="10" fill="#0c130e"/>
+      <rect x="482" y="32" width="7"  height="48" fill="#090e0b"/>
+      <rect x="542" y="18" width="9"  height="62" fill="#0b100d"/>
+      <rect x="538" y="10" width="17" height="10" fill="#0b100d"/>
+      <rect x="602" y="24" width="8"  height="56" fill="#0a0f0c"/>
+      <rect x="662" y="16" width="10" height="64" fill="#0b100d"/>
+      <rect x="658" y="8"  width="14" height="10" fill="#0b100d"/>
+      <rect x="722" y="30" width="7"  height="50" fill="#090e0b"/>
+      <rect x="762" y="20" width="9"  height="60" fill="#0b100d"/>
+      <rect x="782" y="12" width="10" height="68" fill="#0b100d"/>
+      <!-- Sun-touched top highlights on a few trees -->
+      <rect x="56"  y="5"  width="16" height="3"  fill="#3a4a20" opacity="0.3"/>
+      <rect x="176" y="5"  width="16" height="3"  fill="#3a4820" opacity="0.25"/>
+      <rect x="418" y="6"  width="14" height="3"  fill="#3a4820" opacity="0.2"/>
+    </svg>
+  </div>
+
+  <div id="water">
+    <div id="water-shimmer"></div>
+    <div class="fog-ribbon" style="top:-18px;height:50px;background:linear-gradient(180deg,transparent,rgba(28,46,40,0.3),transparent);"></div>
+    <div class="ripple" style="top:20%;left:5%;width:28%;animation-duration:4.5s;animation-delay:-1s;"></div>
+    <div class="ripple" style="top:45%;left:18%;width:55%;animation-duration:6.2s;animation-delay:-2.6s;"></div>
+    <div class="ripple" style="top:70%;left:60%;width:32%;animation-duration:5.0s;animation-delay:-0.8s;"></div>
+    <!-- Sun shimmer ripple on water center -->
+    <div class="ripple" style="top:35%;left:32%;width:36%;animation-duration:3.8s;animation-delay:-1.4s;
+      background:linear-gradient(90deg,transparent,rgba(160,120,40,0.12),rgba(180,140,50,0.18),rgba(160,120,40,0.12),transparent);"></div>
+    <div class="fog-ribbon" style="bottom:-8px;height:44px;background:linear-gradient(0deg,rgba(8,14,10,0.85),transparent);"></div>
+  </div>
+
+  <div id="ground">
+    <div style="position:absolute;top:0;left:0;right:0;height:18px;
+      background:repeating-linear-gradient(90deg,#1a1208 0px,#1a1208 7px,#160f06 8px,#160f06 15px);
+      opacity:0.6;"></div>
+  </div>
+</div>
+
+<!-- Rain canvas -->
+<canvas id="rain-canvas"></canvas>
+
+<!-- UI -->
+<div id="ui">
+  <!-- Top HUD -->
+  <div id="hud-top">
+    <div class="hud-char">GRIBBLE</div>
+    <div class="bar-wrap" style="width:100px;">
+      <div class="bar-label">HP</div>
+      <div class="bar-track" style="width:100px;"><div class="bar-fill-green" style="width:72%;"></div></div>
+    </div>
+    <div class="bar-wrap" style="width:80px;">
+      <div class="bar-label">FAITH</div>
+      <div class="bar-track" style="width:80px;"><div class="bar-fill-amber" style="width:55%;"></div></div>
+    </div>
+    <div class="hud-spacer"></div>
+    <div class="hud-loc">THE BOG OF KETHARA</div>
+  </div>
+
+  <!-- Encounter scene area -->
+  <div id="encounter-scene">
+    <!-- NPC name -->
+    <div id="npc-name">
+      <div class="npc-title">VEXULA THE PUTRID</div>
+      <div class="npc-sub">ancient god · plague domain</div>
+    </div>
+
+    <!-- NPC sprite -->
+    <div class="npc-sprite" style="width:clamp(100px,14vw,160px);height:clamp(150px,20vw,220px);">
+      <div class="sprite-label">GOD<br/>SPRITE</div>
+    </div>
+  </div>
+
+  <!-- Dialogue box -->
+  <div id="dialogue-box">
+    <div id="speech-area">
+      <div class="speaker-name">VEXULA :</div>
+      <div class="speech-text">
+        "You dare enter my festering domain, little frog?
+        The bog remembers those who disrespect it..."<span class="cursor-blink">▮</span>
+      </div>
+    </div>
+    <div id="choices">
+      <div class="choice-btn btn-green" onclick="pick(this)">▸ OFFER TRIBUTE</div>
+      <div class="choice-btn btn-amber" onclick="pick(this)">▸ CHALLENGE IT</div>
+      <div class="choice-btn btn-dim"   onclick="pick(this)">▸ FLEE THE BOG</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Rain ──────────────────────────────────────────────────────────
+const canvas = document.getElementById('rain-canvas');
+const ctx    = canvas.getContext('2d');
+let drops    = [];
+
+function initRain() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+  drops = [];
+  const count = Math.floor(canvas.width * 0.5);
+  for (let i = 0; i < count; i++) {
+    drops.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      len: 5 + Math.random() * 12,
+      speed: 5 + Math.random() * 7,
+      opacity: 0.06 + Math.random() * 0.14,
+    });
+  }
+}
+
+function drawRain() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#6a9aaa';
+  for (const d of drops) {
+    ctx.globalAlpha = d.opacity;
+    ctx.lineWidth = 0.7;
+    ctx.beginPath();
+    ctx.moveTo(d.x, d.y);
+    ctx.lineTo(d.x - d.len * 0.15, d.y + d.len);
+    ctx.stroke();
+    d.y += d.speed;
+    d.x -= d.speed * 0.15;
+    if (d.y > canvas.height) { d.y = -d.len; d.x = Math.random() * canvas.width; }
+  }
+  ctx.globalAlpha = 1;
+  requestAnimationFrame(drawRain);
+}
+
+window.addEventListener('resize', initRain);
+initRain();
+drawRain();
+
+// ── Choice selection ──────────────────────────────────────────────
+function pick(el) {
+  document.querySelectorAll('.choice-btn').forEach(b => {
+    b.style.opacity = b === el ? '1' : '0.35';
+  });
+}
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { adminProcedure, router } from "../_core/trpc";
+import { publicProcedure, router } from "../_core/trpc";
 import {
   bulkInsertLoot,
   countLoot,
@@ -69,11 +69,11 @@ export const adminRouter = router({
 
   // ── USERS ─────────────────────────────────
 
-  listUsers: adminProcedure.query(async () => {
+  listUsers: publicProcedure.query(async () => {
     return listAllUsers();
   }),
 
-  setUserRole: adminProcedure
+  setUserRole: publicProcedure
     .input(z.object({
       userId: z.number().int().positive(),
       role: z.enum(["frog", "god", "admin"]),
@@ -85,11 +85,11 @@ export const adminRouter = router({
 
   // ── FROGS ─────────────────────────────────
 
-  listFrogs: adminProcedure.query(async () => {
+  listFrogs: publicProcedure.query(async () => {
     return listAllFrogs();
   }),
 
-  createTestFrog: adminProcedure
+  createTestFrog: publicProcedure
     .input(z.object({ name: z.string().min(2).max(64) }))
     .mutation(async ({ input }) => {
       const openId = `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -98,7 +98,7 @@ export const adminRouter = router({
       return { success: true, openId };
     }),
 
-  grantXp: adminProcedure
+  grantXp: publicProcedure
     .input(z.object({
       frogId: z.number().int().positive(),
       amount: z.number().int().positive().max(100_000),
@@ -126,7 +126,7 @@ export const adminRouter = router({
       return { success: true, leveled, newLevel, newXp };
     }),
 
-  resurrectFrog: adminProcedure
+  resurrectFrog: publicProcedure
     .input(z.object({ frogId: z.number().int().positive() }))
     .mutation(async ({ input }) => {
       const frog = await getFrogById(input.frogId);
@@ -137,11 +137,11 @@ export const adminRouter = router({
 
   // ── GODS ──────────────────────────────────
 
-  listGods: adminProcedure.query(async () => {
+  listGods: publicProcedure.query(async () => {
     return listAllGods();
   }),
 
-  setDivinePower: adminProcedure
+  setDivinePower: publicProcedure
     .input(z.object({
       godId: z.number().int().positive(),
       amount: z.number().int().min(0).max(10_000),
@@ -155,11 +155,11 @@ export const adminRouter = router({
 
   // ── LOOT ──────────────────────────────────
 
-  listLoot: adminProcedure.query(async () => {
+  listLoot: publicProcedure.query(async () => {
     return listAllLoot();
   }),
 
-  seedLoot: adminProcedure.mutation(async () => {
+  seedLoot: publicProcedure.mutation(async () => {
     const existing = await countLoot();
     if (existing > 0) {
       return { success: false, message: `Loot table already has ${existing} items. Clear it first.` };
@@ -168,7 +168,7 @@ export const adminRouter = router({
     return { success: true, message: `Seeded ${LOOT_SEED.length} loot items.` };
   }),
 
-  grantLoot: adminProcedure
+  grantLoot: publicProcedure
     .input(z.object({
       frogId: z.number().int().positive(),
       lootId: z.number().int().positive(),
@@ -182,7 +182,7 @@ export const adminRouter = router({
 
   // ── ADMIN COMBAT (bypasses user-ownership checks) ─────
 
-  startEncounterAs: adminProcedure
+  startEncounterAs: publicProcedure
     .input(z.object({
       frogId: z.number().int().positive(),
       enemyId: z.string().optional(),
@@ -222,7 +222,7 @@ export const adminRouter = router({
       return { encounter, enemy };
     }),
 
-  submitMoveAs: adminProcedure
+  submitMoveAs: publicProcedure
     .input(CombatMoveSchema)
     .mutation(async ({ input }) => {
       const frog = await getFrogById(input.frogId);

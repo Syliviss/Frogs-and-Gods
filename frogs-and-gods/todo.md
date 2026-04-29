@@ -31,14 +31,8 @@
 - [x] Create server/engine/combatLoop.ts (damage calc, HP update, permadeath)
 - [x] Create server/engine/xpDistributor.ts (isolated XP logic)
 - [x] tRPC combat.startEncounter procedure
-- [x] tRPC combat.submitMove procedure (emits World Log event)
-- [x] tRPC combat.activeEncounters procedure (for Gods)
-
-## Backend — WebSocket Hub
-- [x] Attach WebSocket server to Express HTTP server in server/_core/index.ts
-- [x] World Log broadcaster: emit on every combat turn
-- [x] Intervention listener: HEAL_FROG event handler
-- [x] Intervention listener: SMITE_ENEMY event handler
+- [x] tRPC combat.action procedure (process moves)
+- [x] World intervention listener: SMITE_ENEMY event handler
 - [x] tRPC god.intervene procedure (HEAL_FROG | SMITE_ENEMY)
 
 ## Backend — DB Helpers
@@ -70,8 +64,19 @@
 - [x] Event legend (color-coded types)
 
 ## Tests
-- [x] Vitest: XP distributor (solo, party, dead frogs, level-up) — 6 tests
-- [x] Vitest: combat engine (all moves, permadeath, victory, XP) — 8 tests
-- [x] Vitest: Zod schema validation (CombatMove, GodIntervention, PartyInvite, Enemy) — 12 tests
-- [x] Vitest: auth logout test — 1 test
-- [x] Total: 27 tests passing
+- [x] Vitest: XP distributor (solo, party, dead frogs, overflow)
+
+## Prototype Testing & Backend Harness
+- [ ] 1. Combat Test Harness (`Admin.tsx`)
+  - [ ] Add form inputs to manually spawn specific test enemies.
+  - [ ] Add controls to force-initiate the combat loop between a selected Frog and Enemy.
+  - [ ] Add manual TRPC mutation triggers to grant raw XP to parties to verify `xpDistributor.ts` calculations.
+- [ ] 2. Visualizing the World Log
+  - [ ] Implement a scrolling text container to parse and display real-time WebSocket streams from `useWorldLog.ts`.
+  - [ ] Format the output to cleanly display `combatLoop.ts` events as they happen without requiring database polling.
+- [ ] 3. Player Role Views
+  - [ ] Create an admin quick-toggle to instantly swap the UI between the Frog's context (stats, HP/MP) and the God's context (divine power).
+  - [ ] Ensure TRPC headers update automatically when the role context is switched.
+- [ ] 4. Mock Authentication
+  - [ ] Create a local bypass for `useAuth.ts` to allow instant session initialization.
+  - [ ] Add quick-login buttons for "Test Frog" and "Test God" profiles to speed up multi-player interaction testing without going through the landing page flow.

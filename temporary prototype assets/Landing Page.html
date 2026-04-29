@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Frogs & Gods</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --green:  oklch(0.62 0.10 145);
+    --purple: oklch(0.55 0.10 295);
+    --brown:  oklch(0.38 0.06 55);
+    --blue:   oklch(0.42 0.08 230);
+    --fog:    oklch(0.30 0.04 200);
+    --bg:     #06090a;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    font-family: 'Share Tech Mono', monospace;
+  }
+
+  /* ── Pixel swamp canvas ── */
+  #scene {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+  }
+
+  /* Sky — stormy, bruised */
+  #sky {
+    flex: 0 0 38%;
+    background:
+      linear-gradient(180deg,
+        #060b10 0%,
+        #0b1520 35%,
+        #111d28 60%,
+        #0e1a1f 100%);
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Storm clouds — pixel-chunky */
+  .cloud {
+    position: absolute;
+    background: #1a2a35;
+    image-rendering: pixelated;
+  }
+
+  /* Water / bog surface */
+  #water {
+    flex: 0 0 24%;
+    position: relative;
+    background:
+      linear-gradient(180deg,
+        #0d1e1a 0%,
+        #0a1915 50%,
+        #091410 100%);
+    overflow: hidden;
+  }
+
+  /* Ground / bank */
+  #ground {
+    flex: 1;
+    background:
+      linear-gradient(180deg, #130e09 0%, #0d0a06 100%);
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Scanlines */
+  #scene::after {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg, transparent, transparent 3px,
+      rgba(0,0,0,0.13) 4px
+    );
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  /* Pixel grid */
+  #scene::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px);
+    background-size: 8px 8px;
+    pointer-events: none;
+    z-index: 99;
+  }
+
+  /* Fog ribbons */
+  .fog-ribbon {
+    position: absolute;
+    left: -10%; width: 120%;
+    border-radius: 0;
+    filter: blur(18px);
+    pointer-events: none;
+  }
+
+  /* Lightning flash */
+  #lightning {
+    position: fixed; inset: 0;
+    background: rgba(160,200,255,0.0);
+    pointer-events: none;
+    z-index: 98;
+    transition: background 0.05s;
+  }
+
+  /* ── UI Layer ── */
+  #ui {
+    position: fixed; inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+    gap: 0;
+  }
+
+  /* Title */
+  #title-block {
+    text-align: center;
+    margin-bottom: 36px;
+    user-select: none;
+  }
+
+  #title-main {
+    font-family: 'VT323', monospace;
+    font-size: clamp(42px, 5.5vw, 80px);
+    line-height: 1;
+    letter-spacing: 0.06em;
+    color: #7ab89a;
+    white-space: nowrap;
+    text-shadow:
+      0 0 18px rgba(100,180,140,0.4),
+      0 0 60px rgba(60,120,90,0.2);
+  }
+
+  #title-sub {
+    font-family: 'VT323', monospace;
+    font-size: clamp(18px, 2.5vw, 28px);
+    white-space: nowrap;
+    letter-spacing: 0.45em;
+    color: #4a7a6a;
+    text-shadow: 0 0 10px rgba(60,120,90,0.3);
+    margin-top: -6px;
+  }
+
+  /* Status strip */
+  #status {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    color: #3a5a6a;
+    letter-spacing: 0.12em;
+    margin-bottom: 28px;
+    white-space: nowrap;
+  }
+
+  #status span {
+    color: #5a8a70;
+  }
+
+  /* Two giant choice boxes */
+  #choices {
+    display: flex;
+    gap: 20px;
+    align-items: stretch;
+  }
+
+  .choice-box {
+    width: clamp(180px, 28vw, 340px);
+    height: clamp(200px, 30vh, 320px);
+    border: 2px solid;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.08s, box-shadow 0.15s, background 0.15s;
+    image-rendering: pixelated;
+    user-select: none;
+  }
+
+  .choice-box::before {
+    content: '';
+    position: absolute; inset: 0;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  .choice-box:hover::before { opacity: 1; }
+
+  .choice-box:hover {
+    transform: translateY(-3px);
+  }
+
+  .choice-box:active {
+    transform: translateY(1px);
+  }
+
+  /* Pixel corner accents */
+  .choice-box::after {
+    content: '';
+    position: absolute;
+    top: 4px; left: 4px; right: 4px; bottom: 4px;
+    border: 1px solid;
+    opacity: 0.2;
+    pointer-events: none;
+  }
+
+  /* FROGS box */
+  #box-frogs {
+    border-color: #4a7e60;
+    background: rgba(20, 45, 32, 0.55);
+    box-shadow:
+      0 0 24px rgba(60,140,90,0.2),
+      inset 0 0 30px rgba(20,60,35,0.4),
+      6px 6px 0 rgba(0,0,0,0.8);
+  }
+  #box-frogs::before {
+    background: radial-gradient(ellipse at center, rgba(60,140,90,0.12), transparent 70%);
+  }
+  #box-frogs::after { border-color: #4a7e60; }
+  #box-frogs:hover {
+    background: rgba(24, 54, 38, 0.7);
+    box-shadow:
+      0 0 40px rgba(80,160,110,0.3),
+      inset 0 0 40px rgba(30,80,45,0.5),
+      6px 6px 0 rgba(0,0,0,0.9);
+    border-color: #6aaa84;
+  }
+
+  /* GODS box */
+  #box-gods {
+    border-color: #5a4a7a;
+    background: rgba(28, 18, 50, 0.55);
+    box-shadow:
+      0 0 24px rgba(100,70,160,0.2),
+      inset 0 0 30px rgba(40,20,80,0.4),
+      6px 6px 0 rgba(0,0,0,0.8);
+  }
+  #box-gods::before {
+    background: radial-gradient(ellipse at center, rgba(120,80,200,0.12), transparent 70%);
+  }
+  #box-gods::after { border-color: #5a4a7a; }
+  #box-gods:hover {
+    background: rgba(36, 22, 64, 0.7);
+    box-shadow:
+      0 0 40px rgba(130,90,200,0.3),
+      inset 0 0 40px rgba(60,30,100,0.5),
+      6px 6px 0 rgba(0,0,0,0.9);
+    border-color: #8a6aaa;
+  }
+
+  .choice-label {
+    font-family: 'VT323', monospace;
+    font-size: clamp(44px, 6vw, 76px);
+    line-height: 1;
+    letter-spacing: 0.06em;
+    position: relative;
+    z-index: 2;
+  }
+
+  #box-frogs .choice-label {
+    color: #7ab898;
+    text-shadow: 0 0 16px rgba(80,160,110,0.5), 0 0 50px rgba(60,120,80,0.2);
+  }
+  #box-gods .choice-label {
+    color: #9a7aba;
+    text-shadow: 0 0 16px rgba(140,90,200,0.5), 0 0 50px rgba(100,60,160,0.2);
+  }
+
+  .choice-sub {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: clamp(9px, 1.2vw, 12px);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-top: 8px;
+    position: relative;
+    z-index: 2;
+    white-space: nowrap;
+  }
+
+  #box-frogs .choice-sub { color: #4a7a60; }
+  #box-gods  .choice-sub { color: #6a4a8a; }
+
+  /* Separator */
+  .vs-divider {
+    font-family: 'VT323', monospace;
+    font-size: 32px;
+    color: #2a3a35;
+    align-self: center;
+    text-shadow: none;
+    padding: 0 6px;
+    letter-spacing: 0;
+  }
+
+  /* Bottom hint */
+  @media (max-width: 600px) {
+    #title-main { font-size: clamp(36px, 10vw, 56px); }
+    #title-sub { font-size: 14px; letter-spacing: 0.2em; }
+    #title-block { margin-bottom: 20px; }
+    #status { font-size: 10px; margin-bottom: 18px; }
+
+    #choices {
+      flex-direction: column;
+      gap: 14px;
+      width: 80vw;
+    }
+
+    .choice-box {
+      width: 100% !important;
+      height: clamp(110px, 22vw, 160px);
+    }
+
+    .choice-label { font-size: clamp(38px, 12vw, 60px); }
+
+    .vs-divider { font-size: 22px; padding: 0; }
+
+    #hint { font-size: 9px; letter-spacing: 0.08em; margin-top: 18px; }
+  }
+
+  #hint {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 10px;
+    color: #2a4030;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin-top: 32px;
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  /* Player count online */
+  .online-dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 0;
+    background: #4a9a60;
+    box-shadow: 0 0 6px #4a9a60;
+    margin-right: 6px;
+    vertical-align: middle;
+    animation: blink 2.4s step-start infinite;
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  /* Water ripple animation */
+  .ripple {
+    position: absolute;
+    height: 2px;
+    background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(60,120,100,0.15) 30%,
+      rgba(80,140,110,0.25) 50%,
+      rgba(60,120,100,0.15) 70%,
+      transparent 100%);
+    animation: ripple-move linear infinite;
+  }
+  @keyframes ripple-move {
+    from { transform: translateX(-8px); opacity: 0.6; }
+    50%  { opacity: 1; }
+    to   { transform: translateX(8px); opacity: 0.6; }
+  }
+
+  /* Rain */
+  #rain-canvas {
+    position: fixed; inset: 0;
+    pointer-events: none;
+    z-index: 97;
+    opacity: 0.35;
+  }
+</style>
+</head>
+<body>
+
+<!-- Background scene -->
+<div id="scene">
+  <div id="sky">
+    <!-- Storm clouds (pixel-chunky divs) -->
+    <div class="cloud" style="top:8%;left:5%;width:22%;height:28px;opacity:0.7;background:#192430;box-shadow:0 8px 0 #131c26, 0 16px 0 #0f1820;"></div>
+    <div class="cloud" style="top:4%;left:25%;width:32%;height:36px;opacity:0.6;background:#1c2a38;box-shadow:0 8px 0 #16222e;"></div>
+    <div class="cloud" style="top:12%;left:55%;width:28%;height:24px;opacity:0.65;background:#192430;box-shadow:0 8px 0 #111e2a;"></div>
+    <div class="cloud" style="top:22%;left:70%;width:18%;height:20px;opacity:0.5;background:#141e2a;"></div>
+    <div class="cloud" style="top:18%;left:0%;width:15%;height:16px;opacity:0.4;background:#141e2a;"></div>
+    <!-- Distant treeline silhouette -->
+    <div style="position:absolute;bottom:0;left:0;right:0;height:60px;
+      background:
+        linear-gradient(180deg, transparent 0%, #080e0a 100%);
+      image-rendering:pixelated;
+    "></div>
+    <!-- Pixel tree shapes -->
+    <svg style="position:absolute;bottom:0;left:0;right:0;width:100%;height:70px;display:block;" viewBox="0 0 800 70" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Dead trees silhouette, blocky/pixel -->
+      <rect x="0" y="20" width="8" height="50" fill="#080e0a"/>
+      <rect x="4" y="12" width="8" height="8" fill="#080e0a"/>
+      <rect x="20" y="30" width="6" height="40" fill="#080e0a"/>
+      <rect x="18" y="20" width="10" height="12" fill="#080e0a"/>
+      <rect x="60" y="15" width="10" height="55" fill="#090f0b"/>
+      <rect x="54" y="8" width="12" height="10" fill="#090f0b"/>
+      <rect x="58" y="4" width="14" height="6" fill="#090f0b"/>
+      <rect x="120" y="22" width="8" height="48" fill="#080e0a"/>
+      <rect x="116" y="14" width="16" height="10" fill="#080e0a"/>
+      <rect x="180" y="10" width="10" height="60" fill="#090f0b"/>
+      <rect x="174" y="4" width="14" height="8" fill="#090f0b"/>
+      <rect x="240" y="28" width="7" height="42" fill="#080e0a"/>
+      <rect x="300" y="18" width="9" height="52" fill="#090f0b"/>
+      <rect x="296" y="10" width="17" height="10" fill="#090f0b"/>
+      <rect x="360" y="25" width="8" height="45" fill="#080e0a"/>
+      <rect x="420" y="12" width="10" height="58" fill="#090f0b"/>
+      <rect x="416" y="5" width="14" height="8" fill="#090f0b"/>
+      <rect x="480" y="30" width="7" height="40" fill="#080e0a"/>
+      <rect x="540" y="16" width="9" height="54" fill="#090f0b"/>
+      <rect x="536" y="8" width="17" height="10" fill="#090f0b"/>
+      <rect x="600" y="22" width="8" height="48" fill="#080e0a"/>
+      <rect x="660" y="14" width="10" height="56" fill="#090f0b"/>
+      <rect x="656" y="7" width="14" height="8" fill="#090f0b"/>
+      <rect x="720" y="28" width="7" height="42" fill="#080e0a"/>
+      <rect x="760" y="18" width="9" height="52" fill="#090f0b"/>
+      <rect x="780" y="10" width="10" height="60" fill="#090f0b"/>
+    </svg>
+  </div>
+
+  <div id="water">
+    <!-- Fog at water surface -->
+    <div class="fog-ribbon" style="top:-20px;height:60px;background:linear-gradient(180deg,transparent,rgba(30,50,45,0.35),transparent);"></div>
+    <!-- Water ripples -->
+    <div class="ripple" style="top:25%;left:5%;width:30%;animation-duration:4.2s;animation-delay:-1s;"></div>
+    <div class="ripple" style="top:50%;left:20%;width:50%;animation-duration:5.8s;animation-delay:-2.4s;"></div>
+    <div class="ripple" style="top:70%;left:0%;width:40%;animation-duration:3.9s;animation-delay:-0.7s;"></div>
+    <div class="ripple" style="top:40%;left:55%;width:35%;animation-duration:6.1s;animation-delay:-3s;"></div>
+    <div class="ripple" style="top:80%;left:60%;width:30%;animation-duration:4.7s;animation-delay:-1.5s;"></div>
+    <!-- Murky bottom fog -->
+    <div class="fog-ribbon" style="bottom:-10px;height:50px;background:linear-gradient(0deg,rgba(8,14,10,0.8),transparent);"></div>
+  </div>
+
+  <div id="ground">
+    <!-- Brown muddy pixel texture suggestion -->
+    <div style="position:absolute;top:0;left:0;right:0;height:20px;
+      background:repeating-linear-gradient(90deg,#1a1208 0px,#1a1208 7px,#160f06 8px,#160f06 15px);
+      opacity:0.7;"></div>
+  </div>
+</div>
+
+<!-- Rain canvas -->
+<canvas id="rain-canvas"></canvas>
+
+<!-- Lightning -->
+<div id="lightning"></div>
+
+<!-- UI -->
+<div id="ui">
+  <div id="title-block">
+    <div id="title-main">FROGS &amp; GODS</div>
+    <div id="title-sub">online · multiplayer · rpg</div>
+  </div>
+
+  <div id="status">
+    <span class="online-dot"></span>
+    <span id="player-count">3,841</span> players in the swamp
+  </div>
+
+  <div id="choices">
+    <div class="choice-box" id="box-frogs" onclick="choose('frogs')">
+      <div class="choice-label">FROGS</div>
+      <div class="choice-sub">champion the bog</div>
+    </div>
+
+    <div class="vs-divider">VS</div>
+
+    <div class="choice-box" id="box-gods" onclick="choose('gods')">
+      <div class="choice-label">GODS</div>
+      <div class="choice-sub">claim dominion</div>
+    </div>
+  </div>
+
+  <div id="hint">choose your side to enter the swamp</div>
+</div>
+
+<script>
+// ── Rain ──────────────────────────────────────────────────────────
+const canvas = document.getElementById('rain-canvas');
+const ctx = canvas.getContext('2d');
+let drops = [];
+
+function initRain() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+  drops = [];
+  const count = Math.floor(canvas.width * 0.6);
+  for (let i = 0; i < count; i++) {
+    drops.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      len: 6 + Math.random() * 14,
+      speed: 6 + Math.random() * 8,
+      opacity: 0.08 + Math.random() * 0.18,
+    });
+  }
+}
+
+function drawRain() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#6a9aaa';
+  for (const d of drops) {
+    ctx.globalAlpha = d.opacity;
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(d.x, d.y);
+    ctx.lineTo(d.x - d.len * 0.15, d.y + d.len);
+    ctx.stroke();
+    d.y += d.speed;
+    d.x -= d.speed * 0.15;
+    if (d.y > canvas.height) {
+      d.y = -d.len;
+      d.x = Math.random() * canvas.width;
+    }
+  }
+  ctx.globalAlpha = 1;
+  requestAnimationFrame(drawRain);
+}
+
+window.addEventListener('resize', initRain);
+initRain();
+drawRain();
+
+// ── Lightning ─────────────────────────────────────────────────────
+const lightning = document.getElementById('lightning');
+
+const titleEl = document.getElementById('title-main');
+
+function flashLightning() {
+  const flashes = Math.floor(1 + Math.random() * 3);
+  let delay = 0;
+  for (let i = 0; i < flashes; i++) {
+    const intensity = 0.04 + Math.random() * 0.10;
+    const isBright = intensity > 0.09;
+    setTimeout(() => {
+      lightning.style.background = `linear-gradient(180deg, rgba(140,180,220,${intensity}) 0%, rgba(140,180,220,${intensity * 0.5}) 35%, rgba(140,180,220,${intensity * 0.15}) 65%, rgba(140,180,220,0) 100%)`;
+      // Title electric glow on bright flashes
+      if (isBright) {
+        titleEl.style.textShadow = `
+          0 0 8px #fff,
+          0 0 24px rgba(160,220,180,0.9),
+          0 0 60px rgba(100,200,140,0.7),
+          0 0 120px rgba(60,160,100,0.4)
+        `;
+        titleEl.style.color = '#d0ffe8';
+      }
+      const dur = 130 + Math.random() * 80;
+      // Box shadows: light from top → shadow drops to bottom
+      const frogsBox = document.getElementById('box-frogs');
+      const godsBox  = document.getElementById('box-gods');
+      if (isBright) {
+        const shadowGreen  = `0 18px 32px rgba(0,0,0,0.9), 0 28px 48px rgba(0,0,0,0.7), 6px 6px 0 rgba(0,0,0,0.9)`;
+        const shadowPurple = `0 18px 32px rgba(0,0,0,0.9), 0 28px 48px rgba(0,0,0,0.7), 6px 6px 0 rgba(0,0,0,0.9)`;
+        frogsBox.style.boxShadow = shadowGreen;
+        godsBox.style.boxShadow  = shadowPurple;
+      }
+      setTimeout(() => {
+        lightning.style.background = 'none';
+        if (isBright) {
+          // Fade title back
+          titleEl.style.transition = 'color 0.2s, text-shadow 0.25s';
+          titleEl.style.textShadow = '0 0 18px rgba(100,180,140,0.4), 0 0 60px rgba(60,120,90,0.2)';
+          titleEl.style.color = '#7ab89a';
+          // Fade box shadows back
+          frogsBox.style.transition = 'box-shadow 0.3s';
+          godsBox.style.transition  = 'box-shadow 0.3s';
+          frogsBox.style.boxShadow = '0 0 24px rgba(60,140,90,0.2), inset 0 0 30px rgba(20,60,35,0.4), 6px 6px 0 rgba(0,0,0,0.8)';
+          godsBox.style.boxShadow  = '0 0 24px rgba(100,70,160,0.2), inset 0 0 30px rgba(40,20,80,0.4), 6px 6px 0 rgba(0,0,0,0.8)';
+          setTimeout(() => {
+            titleEl.style.transition = '';
+            frogsBox.style.transition = '';
+            godsBox.style.transition  = '';
+          }, 320);
+        }
+      }, dur);
+    }, delay);
+    delay += 120 + Math.random() * 100;
+  }
+  setTimeout(flashLightning, 4000 + Math.random() * 12000);
+}
+
+setTimeout(flashLightning, 2000 + Math.random() * 5000);
+
+// ── Fake player count ─────────────────────────────────────────────
+let playerCount = 3841;
+setInterval(() => {
+  playerCount += Math.floor(Math.random() * 5) - 2;
+  document.getElementById('player-count').textContent = playerCount.toLocaleString();
+}, 3500);
+
+// ── Choice ────────────────────────────────────────────────────────
+function choose(side) {
+  // Placeholder — flash the chosen box
+  const box = document.getElementById('box-' + side);
+  box.style.transition = 'none';
+  box.style.opacity = '0.4';
+  setTimeout(() => {
+    box.style.transition = 'transform 0.08s, box-shadow 0.15s, background 0.15s';
+    box.style.opacity = '1';
+  }, 100);
+}
+</script>
+</body>
+</html>
