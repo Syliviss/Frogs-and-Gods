@@ -12,16 +12,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 // HELPERS
 // ─────────────────────────────────────────────
 
-const ENEMY_TEMPLATES = [
-  { id: "swamp-toad",    name: "Swamp Toad"   },
-  { id: "mud-golem",     name: "Mud Golem"    },
-  { id: "bog-wraith",    name: "Bog Wraith"   },
-  { id: "elder-serpent", name: "Elder Serpent" },
-  { id: "void-herald",   name: "Void Herald"  },
-];
-
-const MOVE_TYPES = ["ATTACK", "MAGIC", "DEFEND", "FLEE"] as const;
-
 const RARITY_COLORS: Record<string, string> = {
   "Common":             "#9ca3af",
   "Uncommon":           "#4ade80",
@@ -313,186 +303,6 @@ function GodsTab() {
 }
 
 // ─────────────────────────────────────────────
-// COMBAT TAB
-// ─────────────────────────────────────────────
-
-function CombatTab() {
-  const { data: frogs } = trpc.admin.listFrogs.useQuery();
-  const { data: activeEncounters, refetch: refetchEncounters } = trpc.combat.activeEncounters.useQuery();
-
-  const startEncounter = trpc.admin.startEncounterAs.useMutation({
-    onSuccess: (data) => {
-      setCombatLog((prev) => [
-        `[START] Frog #${data.encounter.frogId} vs ${data.enemy.name} (Encounter #${data.encounter.id})`,
-        ...prev,
-      ]);
-      setActiveEncounterId(data.encounter.id);
-      setActiveFrogId(data.encounter.frogId ?? null);
-      refetchEncounters();
-    },
-  });
-
-  const submitMove = trpc.admin.submitMoveAs.useMutation({
-    onSuccess: (data) => {
-      const { turnResult } = data;
-      const lines = [
-        ...turnResult.log,
-        `→ Status: ${turnResult.encounterStatus}`,
-      ];
-      if (turnResult.lootDropped) lines.push(`[LOOT] ${turnResult.lootDropped}`);
-      setCombatLog((prev) => [...lines.reverse(), ...prev]);
-      if (turnResult.encounterStatus !== "active") {
-        setActiveEncounterId(null);
-        setActiveFrogId(null);
-      }
-      refetchEncounters();
-    },
-  });
-
-  const [selectedFrogId, setSelectedFrogId] = useState<string>("");
-  const [selectedEnemyId, setSelectedEnemyId] = useState<string>("swamp-toad");
-  const [activeEncounterId, setActiveEncounterId] = useState<number | null>(null);
-  const [activeFrogId, setActiveFrogId] = useState<number | null>(null);
-  const [combatLog, setCombatLog] = useState<string[]>([]);
-
-  const aliveFrogs = frogs?.filter((f) => !f.isDead) ?? [];
-
-  return (
-    <div style={{ display: "flex", gap: 16 }}>
-      <div style={{ flex: "0 0 280px", display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ background: "#0a1120", border: "1px solid #1e2a3a", borderRadius: 8, padding: 14 }}>
-          <p style={{ fontSize: 12, color: "#9ca3af", marginBottom: 8 }}>Start New Encounter</p>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div>
-              <Label style={{ fontSize: 11, color: "#6b7280" }}>Frog</Label>
-              <select
-                value={selectedFrogId}
-                onChange={(e) => setSelectedFrogId(e.target.value)}
-                style={{
-                  width: "100%", marginTop: 4, padding: "6px 8px",
-                  background: "#0f1929", border: "1px solid #1e2a3a",
-                  borderRadius: 6, color: "#e2e8f0", fontSize: 13,
-                }}
-              >
-                <option value="">Select frog...</option>
-                {aliveFrogs.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    #{f.id} {f.name} (Lv.{f.level})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <Label style={{ fontSize: 11, color: "#6b7280" }}>Enemy</Label>
-              <select
-                value={selectedEnemyId}
-                onChange={(e) => setSelectedEnemyId(e.target.value)}
-                style={{
-                  width: "100%", marginTop: 4, padding: "6px 8px",
-                  background: "#0f1929", border: "1px solid #1e2a3a",
-                  borderRadius: 6, color: "#e2e8f0", fontSize: 13,
-                }}
-              >
-                {ENEMY_TEMPLATES.map((e) => (
-                  <option key={e.id} value={e.id}>{e.name}</option>
-                ))}
-              </select>
-            </div>
-            <Button
-              size="sm"
-              disabled={!selectedFrogId || startEncounter.isPending || !!activeEncounterId}
-              onClick={() => {
-                if (!selectedFrogId) return;
-                startEncounter.mutate({ frogId: parseInt(selectedFrogId), enemyId: selectedEnemyId });
-              }}
-            >
-              {activeEncounterId ? "Encounter Active" : "Start Encounter"}
-            </Button>
-          </div>
-        </div>
-
-        {activeEncounterId && activeFrogId && (
-          <div style={{ background: "#0a1120", border: "1px solid #1e2a3a", borderRadius: 8, padding: 14 }}>
-            <p style={{ fontSize: 12, color: "#9ca3af", marginBottom: 8 }}>
-              Encounter #{activeEncounterId} — Submit Move
-            </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {MOVE_TYPES.map((move) => (
-                <Button
-                  key={move}
-                  size="sm"
-                  variant="outline"
-                  disabled={submitMove.isPending}
-                  onClick={() =>
-                    submitMove.mutate({
-                      encounterId: activeEncounterId,
-                      frogId: activeFrogId,
-                      moveType: move,
-                    })
-                  }
-                  style={{ justifyContent: "flex-start" }}
-                >
-                  {move}
-                </Button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div style={{ background: "#0a1120", border: "1px solid #1e2a3a", borderRadius: 8, padding: 14 }}>
-          <p style={{ fontSize: 12, color: "#9ca3af", marginBottom: 6 }}>
-            Active Encounters: {activeEncounters?.length ?? 0}
-          </p>
-          {activeEncounters?.map((enc) => (
-            <div key={enc.id} style={{ fontSize: 12, color: "#6b7280", marginBottom: 2 }}>
-              #{enc.id} — Frog {enc.frogId} — Turn {enc.currentTurn}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div style={{ flex: 1 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, alignItems: "center" }}>
-          <p style={{ fontSize: 12, color: "#9ca3af" }}>Combat Log</p>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setCombatLog([])}
-            style={{ fontSize: 11, padding: "2px 8px", height: "auto" }}
-          >
-            Clear
-          </Button>
-        </div>
-        <ScrollArea style={{ height: 500, background: "#0a1120", border: "1px solid #1e2a3a", borderRadius: 8, padding: 12 }}>
-          {combatLog.length === 0 ? (
-            <p style={{ color: "#4b5563", fontSize: 13, fontStyle: "italic" }}>
-              No combat yet. Start an encounter to begin.
-            </p>
-          ) : (
-            combatLog.map((line, i) => (
-              <p
-                key={i}
-                style={{
-                  fontSize: 12,
-                  color: line.startsWith("[START]") ? "#60a5fa"
-                    : line.startsWith("→ Status") ? "#9ca3af"
-                    : line.startsWith("[LOOT]") ? "#fde68a"
-                    : "#e2e8f0",
-                  marginBottom: 3,
-                  fontFamily: "monospace",
-                }}
-              >
-                {line}
-              </p>
-            ))
-          )}
-        </ScrollArea>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────
 // LOOT TAB
 // ─────────────────────────────────────────────
 
@@ -778,7 +588,6 @@ export default function Admin() {
             <TabsTrigger value="users">Users</TabsTrigger>
             <TabsTrigger value="frogs">Frogs</TabsTrigger>
             <TabsTrigger value="gods">Gods</TabsTrigger>
-            <TabsTrigger value="combat">Combat</TabsTrigger>
             <TabsTrigger value="loot">Loot</TabsTrigger>
             <TabsTrigger value="log">World Log</TabsTrigger>
           </TabsList>
@@ -794,7 +603,6 @@ export default function Admin() {
             <TabsContent value="users"><UsersTab /></TabsContent>
             <TabsContent value="frogs"><FrogsTab /></TabsContent>
             <TabsContent value="gods"><GodsTab /></TabsContent>
-            <TabsContent value="combat"><CombatTab /></TabsContent>
             <TabsContent value="loot"><LootTab /></TabsContent>
             <TabsContent value="log"><WorldLogTab /></TabsContent>
           </div>

@@ -8,6 +8,13 @@ import App from "./App";
 import { getLoginUrl } from "./const";
 import "./index.css";
 
+declare global {
+  interface Window {
+    __WOUTER_ROUTES__?: string[];
+  }
+}
+window.__WOUTER_ROUTES__ = ["/", "/404"];
+
 const queryClient = new QueryClient();
 
 const redirectToLoginIfUnauthorized = (error: unknown) => {
