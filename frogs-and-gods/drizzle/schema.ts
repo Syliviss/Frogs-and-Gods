@@ -5,6 +5,7 @@ import {
   mysqlTable,
   text,
   timestamp,
+  uniqueIndex,
   varchar,
   float,
 } from "drizzle-orm/mysql-core";
@@ -180,3 +181,47 @@ export const worldLogEvents = mysqlTable("world_log_events", {
 
 export type WorldLogEvent = typeof worldLogEvents.$inferSelect;
 export type InsertWorldLogEvent = typeof worldLogEvents.$inferInsert;
+
+// ─────────────────────────────────────────────
+// WORLD MAP CHUNKS  (lazy-loaded 16×16 tile chunks)
+// ─────────────────────────────────────────────
+
+export const worldMapChunks = mysqlTable("world_map_chunks", {
+  id:           int("id").autoincrement().primaryKey(),
+  chunkX:       int("chunk_x").notNull(),
+  chunkY:       int("chunk_y").notNull(),
+  chunkSize:    int("chunk_size").default(16).notNull(),
+  biome:        varchar("biome", { length: 32 }).default("grassland").notNull(),
+  terrainDataJson: text("terrain_data_json"),
+  overridesJson:   text("overrides_json"),
+  isActive:        boolean("is_active").default(false).notNull(),
+  entityCount:  int("entity_count").default(0).notNull(),
+  lastLoadedAt: timestamp("last_loaded_at"),
+  createdAt:    timestamp("createdAt").defaultNow().notNull(),
+  updatedAt:    timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  uniqueChunkPos: uniqueIndex("unique_chunk_pos").on(table.chunkX, table.chunkY),
+}));
+
+export type WorldMapChunk = typeof worldMapChunks.$inferSelect;
+export type InsertWorldMapChunk = typeof worldMapChunks.$inferInsert;
+
+// ─────────────────────────────────────────────
+// ITEMS  (1-of-1 economy — every item is unique)
+// ─────────────────────────────────────────────
+
+export const items = mysqlTable("items", {
+  itemId:          varchar("item_id", { length: 36 }).primaryKey(),
+  name:            varchar("name", { length: 128 }).notNull(),
+  rarityTier:      int("rarity_tier").default(1).notNull(),
+  statsJson:       text("stats_json").notNull(),
+  ownerType:       mysqlEnum("owner_type", ["frog", "god", "world_drop", "void"])
+                     .default("world_drop").notNull(),
+  ownerId:         int("owner_id"),
+  locationDropped: varchar("location_dropped", { length: 128 }),
+  createdAt:       timestamp("createdAt").defaultNow().notNull(),
+  updatedAt:       timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Item = typeof items.$inferSelect;
+export type InsertItem = typeof items.$inferInsert;

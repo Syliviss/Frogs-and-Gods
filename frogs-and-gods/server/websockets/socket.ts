@@ -39,7 +39,15 @@ function broadcastToGods(data: unknown): void {
 // ─────────────────────────────────────────────
 
 export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
-  const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+  const wss = new WebSocketServer({ noServer: true });
+
+  httpServer.on("upgrade", (req, socket, head) => {
+    const pathname = req.url?.split("?")[0];
+    if (pathname !== "/ws") return;
+    wss.handleUpgrade(req, socket as import("net").Socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  });
 
   // ── Subscribe to World Log emitter ──
   const emitter = getWorldLogEmitter();

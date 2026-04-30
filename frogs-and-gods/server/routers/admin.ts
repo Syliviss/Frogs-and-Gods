@@ -6,16 +6,23 @@ import {
   countLoot,
   createEncounter,
   createFrog,
+  createItem,
   createUserWithOpenId,
   createWorldLogEvent,
+  createWorldMapChunk,
+  getChunksByCoords,
+  listWorldMapChunks,
   getFrogById,
   getGodById,
   getEncounterById,
+  getItemStats,
+  getWorldChunkStats,
   grantLootToFrog,
   listAllFrogs,
   listAllGods,
   listAllLoot,
   listAllUsers,
+  listRecentItems,
   setUserRole,
   updateEncounter,
   updateFrog,
@@ -23,7 +30,8 @@ import {
 } from "../db";
 import { processTurn } from "../engine/combatLoop";
 import { xpToNextLevel } from "../engine/xpDistributor";
-import { CombatMoveSchema, EnemySchema } from "../../shared/game.schema";
+import { CombatMoveSchema, EnemySchema, GetChunksByCoordsSchema, SpawnChunkSchema, SpawnItemSchema } from "../../shared/game.schema";
+import { generateChunk, WORLD_SEED } from "../utils/worldGenerator";
 import { getWorldLogEmitter } from "../websockets/worldLogEmitter";
 
 // ─────────────────────────────────────────────
@@ -179,6 +187,67 @@ export const adminRouter = router({
       await grantLootToFrog(input.frogId, input.lootId);
       return { success: true };
     }),
+
+  // ── WORLD MAP CHUNKS & ITEMS ──────────────────
+
+  getWorldStats: publicProcedure.query(async () => {
+    const [chunkStats, itemStats] = await Promise.all([
+      getWorldChunkStats(),
+      getItemStats(),
+    ]);
+    return { ...chunkStats, ...itemStats };
+  }),
+
+  spawnChunk: publicProcedure
+    .input(SpawnChunkSchema)
+    .mutation(async ({ input }) => {
+      const terrainGrid = generateChunk(input.chunkX, input.chunkY, WORLD_SEED);
+      const chunk = await createWorldMapChunk({
+        chunkX: input.chunkX,
+        chunkY: input.chunkY,
+        chunkSize: input.chunkSize,
+        biome: input.biome,
+        terrainDataJson: JSON.stringify(terrainGrid),
+      });
+      return { success: true, chunk };
+    }),
+
+  listChunks: publicProcedure.query(async () => {
+    return listWorldMapChunks();
+  }),
+
+  getChunksByCoords: publicProcedure
+    .input(GetChunksByCoordsSchema)
+    .query(async ({ input }) => {
+      const chunks = await getChunksByCoords(input.coords);
+      const result: Record<string, string[][]> = {};
+      for (const chunk of chunks) {
+        if (chunk.terrainDataJson) {
+          result[`${chunk.chunkX}:${chunk.chunkY}`] = JSON.parse(chunk.terrainDataJson) as string[][];
+        }
+      }
+      return result;
+    }),
+
+  spawnItem: publicProcedure
+    .input(SpawnItemSchema)
+    .mutation(async ({ input }) => {
+      const itemId = crypto.randomUUID();
+      const item = await createItem({
+        itemId,
+        name: input.name,
+        rarityTier: input.rarityTier,
+        statsJson: JSON.stringify(input.stats),
+        ownerType: input.ownerType,
+        ownerId: input.ownerId ?? undefined,
+        locationDropped: input.locationDropped ?? undefined,
+      });
+      return { success: true, item };
+    }),
+
+  listItems: publicProcedure.query(async () => {
+    return listRecentItems(50);
+  }),
 
   // ── ADMIN COMBAT (bypasses user-ownership checks) ─────
 

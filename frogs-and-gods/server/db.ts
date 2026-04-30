@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -6,21 +6,27 @@ import {
   frogInventory,
   frogs,
   gods,
+  items,
   loot,
   parties,
   partyInvites,
   users,
   worldLogEvents,
+  worldMapChunks,
   type Encounter,
   type Frog,
   type God,
   type InsertEncounter,
   type InsertFrog,
   type InsertGod,
+  type InsertItem,
   type InsertLoot,
   type InsertParty,
   type InsertWorldLogEvent,
+  type InsertWorldMapChunk,
+  type Item,
   type Party,
+  type WorldMapChunk,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
@@ -369,4 +375,102 @@ export async function createUserWithOpenId(openId: string, name: string): Promis
   await db.insert(users).values({ openId, name, role: "frog", lastSignedIn: new Date() });
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
   return result[0]!.id;
+}
+
+// ─────────────────────────────────────────────
+// WORLD MAP CHUNKS
+// ─────────────────────────────────────────────
+
+export async function createWorldMapChunk(data: InsertWorldMapChunk): Promise<WorldMapChunk> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.insert(worldMapChunks).values(data).onDuplicateKeyUpdate({
+    set: { terrainDataJson: data.terrainDataJson, biome: data.biome, updatedAt: new Date() },
+  });
+  const result = await db
+    .select()
+    .from(worldMapChunks)
+    .where(and(
+      eq(worldMapChunks.chunkX, data.chunkX!),
+      eq(worldMapChunks.chunkY, data.chunkY!)
+    ))
+    .limit(1);
+  return result[0]!;
+}
+
+export async function getWorldChunkStats(): Promise<{
+  totalChunks: number;
+  activeChunks: number;
+}> {
+  const db = await getDb();
+  if (!db) return { totalChunks: 0, activeChunks: 0 };
+  const [totalResult, activeResult] = await Promise.all([
+    db.select({ value: count() }).from(worldMapChunks),
+    db.select({ value: count() }).from(worldMapChunks).where(eq(worldMapChunks.isActive, true)),
+  ]);
+  return {
+    totalChunks: totalResult[0]?.value ?? 0,
+    activeChunks: activeResult[0]?.value ?? 0,
+  };
+}
+
+export async function listWorldMapChunks(): Promise<WorldMapChunk[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(worldMapChunks).orderBy(worldMapChunks.chunkX, worldMapChunks.chunkY);
+}
+
+export async function getChunksByCoords(
+  coords: { chunkX: number; chunkY: number }[]
+): Promise<WorldMapChunk[]> {
+  const db = await getDb();
+  if (!db || coords.length === 0) return [];
+  const conditions = coords.map((c) =>
+    and(eq(worldMapChunks.chunkX, c.chunkX), eq(worldMapChunks.chunkY, c.chunkY))
+  );
+  return db.select().from(worldMapChunks).where(or(...conditions));
+}
+
+// ─────────────────────────────────────────────
+// ITEMS (1-of-1)
+// ─────────────────────────────────────────────
+
+export async function createItem(data: InsertItem): Promise<Item> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.insert(items).values(data);
+  const result = await db.select().from(items).where(eq(items.itemId, data.itemId)).limit(1);
+  return result[0]!;
+}
+
+export async function listRecentItems(limit = 50): Promise<Item[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(items).orderBy(desc(items.createdAt)).limit(limit);
+}
+
+export async function getItemStats(): Promise<{
+  totalItems: number;
+  itemsByTier: Record<number, number>;
+}> {
+  const db = await getDb();
+  if (!db) return { totalItems: 0, itemsByTier: {} };
+
+  const [totalResult, byTierResult] = await Promise.all([
+    db.select({ value: count() }).from(items),
+    db.select({
+      tier: items.rarityTier,
+      cnt: count(),
+    }).from(items).groupBy(items.rarityTier),
+  ]);
+
+  const itemsByTier: Record<number, number> = {};
+  for (const row of byTierResult) {
+    itemsByTier[row.tier] = row.cnt;
+  }
+
+  return {
+    totalItems: totalResult[0]?.value ?? 0,
+    itemsByTier,
+  };
 }

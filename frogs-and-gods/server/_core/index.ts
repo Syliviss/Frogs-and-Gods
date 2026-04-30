@@ -9,6 +9,11 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { attachWebSocketServer } from "../websockets/socket";
+import { sdk } from "./sdk";
+import { getSessionCookieOptions } from "./cookies";
+import { upsertUser, getUserByOpenId } from "../db";
+import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { ENV } from "./env";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -37,6 +42,29 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
+
+  if (process.env.NODE_ENV === "development") {
+    app.post("/api/dev-login", async (req, res) => {
+      try {
+        await upsertUser({
+          openId: "dev-admin",
+          name: "Dev Admin",
+          email: "dev@localhost",
+          loginMethod: "dev",
+          role: "admin",
+          lastSignedIn: new Date(),
+        });
+        const user = await getUserByOpenId("dev-admin");
+        if (!user) { res.status(500).json({ error: "Failed to create dev user" }); return; }
+        const token = await sdk.signSession({ openId: "dev-admin", appId: ENV.appId, name: "Dev Admin" });
+        const cookieOptions = getSessionCookieOptions(req);
+        res.cookie(COOKIE_NAME, token, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+        res.json({ success: true });
+      } catch (err) {
+        res.status(500).json({ error: String(err) });
+      }
+    });
+  }
   // tRPC API
   app.use(
     "/api/trpc",

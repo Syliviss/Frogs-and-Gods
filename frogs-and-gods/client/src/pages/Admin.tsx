@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useWorldLog } from "@/hooks/useWorldLog";
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Viewport } from "@/components/Viewport";
 
 // ─────────────────────────────────────────────
 // HELPERS
@@ -620,6 +621,359 @@ function LootTab() {
 }
 
 // ─────────────────────────────────────────────
+// WORLD TAB (chunks + 1-of-1 items)
+// ─────────────────────────────────────────────
+
+const TIER_COLORS: Record<number, string> = {
+  1:  "#9ca3af",
+  2:  "#4ade80",
+  3:  "#60a5fa",
+  4:  "#c084fc",
+  5:  "#fb923c",
+  6:  "#f43f5e",
+  7:  "#e0f2fe",
+  8:  "#7c3aed",
+  9:  "#fde68a",
+  10: "#f0abfc",
+  11: "#fca5a5",
+  12: "#ffd700",
+};
+
+const TIER_LABELS: Record<number, string> = {
+  1:  "Common",
+  2:  "Uncommon",
+  3:  "Rare",
+  4:  "Epic",
+  5:  "Legendary",
+  6:  "Mythic",
+  7:  "Celestial",
+  8:  "Abyssal",
+  9:  "Divine",
+  10: "Transcendent",
+  11: "Primordial",
+  12: "Mythic Transcendent",
+};
+
+// ─────────────────────────────────────────────
+// CHUNKS TABLE (shared sub-component)
+// ─────────────────────────────────────────────
+
+function ChunksTable({ onFocus }: { onFocus: (chunkX: number, chunkY: number) => void }) {
+  const { data: chunks } = trpc.admin.listChunks.useQuery();
+
+  return (
+    <div>
+      <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>
+        Spawned Chunks ({chunks?.length ?? 0})
+      </p>
+      <ScrollArea style={{ height: 260 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid #1e2a3a", color: "#9ca3af", textAlign: "left" }}>
+              <th style={{ padding: "6px 8px" }}>Coords</th>
+              <th style={{ padding: "6px 8px" }}>Biome</th>
+              <th style={{ padding: "6px 8px" }}>Has Terrain</th>
+              <th style={{ padding: "6px 8px" }}>Created</th>
+              <th style={{ padding: "6px 8px" }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {chunks?.map((chunk) => (
+              <tr key={chunk.id} style={{ borderBottom: "1px solid #0f1929" }}>
+                <td style={{ padding: "6px 8px", fontFamily: "monospace", color: "#60a5fa" }}>
+                  ({chunk.chunkX}, {chunk.chunkY})
+                </td>
+                <td style={{ padding: "6px 8px", color: "#9ca3af", textTransform: "capitalize" }}>
+                  {chunk.biome}
+                </td>
+                <td style={{ padding: "6px 8px" }}>
+                  <span style={{ color: chunk.terrainDataJson ? "#4ade80" : "#f87171", fontSize: 11 }}>
+                    {chunk.terrainDataJson ? "yes" : "no"}
+                  </span>
+                </td>
+                <td style={{ padding: "6px 8px", color: "#4b5563", fontSize: 11 }}>
+                  {new Date(chunk.createdAt).toLocaleString()}
+                </td>
+                <td style={{ padding: "6px 8px" }}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    style={{ fontSize: 10, height: 24, padding: "0 8px" }}
+                    onClick={() => onFocus(chunk.chunkX, chunk.chunkY)}
+                  >
+                    Focus
+                  </Button>
+                </td>
+              </tr>
+            ))}
+            {(!chunks || chunks.length === 0) && (
+              <tr>
+                <td colSpan={5} style={{ padding: "20px 8px", textAlign: "center", color: "#4b5563", fontStyle: "italic" }}>
+                  No chunks spawned yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </ScrollArea>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// ITEMS TAB
+// ─────────────────────────────────────────────
+
+function ItemsTab() {
+  const utils = trpc.useUtils();
+  const { data: worldStats } = trpc.admin.getWorldStats.useQuery();
+  const { data: itemsList } = trpc.admin.listItems.useQuery();
+
+  const spawnItem = trpc.admin.spawnItem.useMutation({
+    onSuccess: () => {
+      utils.admin.getWorldStats.invalidate();
+      utils.admin.listItems.invalidate();
+    },
+  });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Rarity tier breakdown */}
+      <div>
+        <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>Items by Rarity Tier</p>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {Array.from({ length: 12 }, (_, i) => i + 1).map((tier) => {
+            const cnt = worldStats?.itemsByTier?.[tier] ?? 0;
+            return (
+              <div
+                key={tier}
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: 12,
+                  border: `1px solid ${TIER_COLORS[tier]}`,
+                  fontSize: 11,
+                  color: TIER_COLORS[tier],
+                  opacity: cnt === 0 ? 0.35 : 1,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                T{tier} · {cnt}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Spawn action */}
+      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <Button
+          size="sm"
+          disabled={spawnItem.isPending}
+          onClick={() =>
+            spawnItem.mutate({
+              name: "The Sacred Lily Pad",
+              rarityTier: 12,
+              stats: { attackBonus: 50, defenseBonus: 40, hpBonus: 200, mpBonus: 100, specialAbility: "Ribbit of Doom" },
+              ownerType: "world_drop",
+              ownerId: null,
+              locationDropped: "chunk:0:0",
+            })
+          }
+        >
+          Spawn Test Item (T12)
+        </Button>
+        {spawnItem.isSuccess && <span style={{ fontSize: 12, color: "#fde68a" }}>Item spawned!</span>}
+        {spawnItem.isError && <span style={{ fontSize: 12, color: "#f87171" }}>{spawnItem.error?.message}</span>}
+      </div>
+
+      {/* Items table */}
+      <div>
+        <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>
+          Latest {itemsList?.length ?? 0} Items
+        </p>
+        <ScrollArea style={{ height: 400 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #1e2a3a", color: "#9ca3af", textAlign: "left" }}>
+                <th style={{ padding: "6px 8px" }}>UUID</th>
+                <th style={{ padding: "6px 8px" }}>Name</th>
+                <th style={{ padding: "6px 8px" }}>Tier</th>
+                <th style={{ padding: "6px 8px" }}>Owner Type</th>
+                <th style={{ padding: "6px 8px" }}>Owner ID</th>
+                <th style={{ padding: "6px 8px" }}>Location</th>
+                <th style={{ padding: "6px 8px" }}>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {itemsList?.map((item) => (
+                <tr key={item.itemId} style={{ borderBottom: "1px solid #0f1929" }}>
+                  <td style={{ padding: "6px 8px", color: "#6b7280", fontFamily: "monospace" }}>
+                    {item.itemId.slice(0, 8)}…
+                  </td>
+                  <td style={{ padding: "6px 8px", color: TIER_COLORS[item.rarityTier] ?? "#e2e8f0", fontWeight: 600 }}>
+                    {item.name}
+                  </td>
+                  <td style={{ padding: "6px 8px" }}>
+                    <span style={{ color: TIER_COLORS[item.rarityTier], fontSize: 11 }}>
+                      T{item.rarityTier} {TIER_LABELS[item.rarityTier]}
+                    </span>
+                  </td>
+                  <td style={{ padding: "6px 8px", color: "#9ca3af" }}>{item.ownerType}</td>
+                  <td style={{ padding: "6px 8px", color: "#6b7280" }}>{item.ownerId ?? "—"}</td>
+                  <td style={{ padding: "6px 8px", color: "#6b7280" }}>{item.locationDropped ?? "—"}</td>
+                  <td style={{ padding: "6px 8px", color: "#4b5563", fontSize: 11 }}>
+                    {new Date(item.createdAt).toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+              {(!itemsList || itemsList.length === 0) && (
+                <tr>
+                  <td colSpan={7} style={{ padding: "20px 8px", textAlign: "center", color: "#4b5563", fontStyle: "italic" }}>
+                    No items yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </ScrollArea>
+      </div>
+    </div>
+  );
+}
+
+const DIRECTIONS = [
+  { label: "NW", dx: -1, dy: -1 },
+  { label: "N",  dx:  0, dy: -1 },
+  { label: "NE", dx:  1, dy: -1 },
+  { label: "W",  dx: -1, dy:  0 },
+  { label: "·",  dx:  0, dy:  0 },
+  { label: "E",  dx:  1, dy:  0 },
+  { label: "SW", dx: -1, dy:  1 },
+  { label: "S",  dx:  0, dy:  1 },
+  { label: "SE", dx:  1, dy:  1 },
+] as const;
+
+function WorldTab() {
+  const utils = trpc.useUtils();
+  const { data: worldStats, isLoading: statsLoading } = trpc.admin.getWorldStats.useQuery();
+
+  const [centerChunk, setCenterChunk] = useState({ chunkX: 0, chunkY: 0 });
+
+  const neighborCoords = useMemo(() => {
+    const coords = [];
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++)
+        coords.push({ chunkX: centerChunk.chunkX + dx, chunkY: centerChunk.chunkY + dy });
+    return coords;
+  }, [centerChunk.chunkX, centerChunk.chunkY]);
+
+  const { data: chunkMap } = trpc.admin.getChunksByCoords.useQuery({ coords: neighborCoords });
+
+  const spawnChunk = trpc.admin.spawnChunk.useMutation({
+    onSuccess: () => {
+      utils.admin.getWorldStats.invalidate();
+      utils.admin.getChunksByCoords.invalidate();
+      utils.admin.listChunks.invalidate();
+    },
+  });
+
+  const statCards = [
+    { label: "Total Chunks", value: worldStats?.totalChunks ?? 0, color: "#60a5fa" },
+    { label: "Active Chunks", value: worldStats?.activeChunks ?? 0, color: "#4ade80" },
+    { label: "Total Items",   value: worldStats?.totalItems ?? 0,   color: "#fde68a" },
+  ];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* Stat cards */}
+      <div style={{ display: "flex", gap: 12 }}>
+        {statCards.map((card) => (
+          <div
+            key={card.label}
+            style={{
+              flex: 1,
+              background: "#0a1120",
+              border: "1px solid #1e2a3a",
+              borderRadius: 8,
+              padding: "14px 18px",
+            }}
+          >
+            <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 4 }}>{card.label}</p>
+            <p style={{ fontSize: 28, fontWeight: 700, color: card.color, margin: 0 }}>
+              {statsLoading ? "—" : card.value}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* Map preview + directional spawn */}
+      <div
+        style={{
+          background: "#0a1120",
+          border: "1px solid #1e2a3a",
+          borderRadius: 8,
+          padding: "14px 18px",
+        }}
+      >
+        <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 10, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+          Map Preview · Center ({centerChunk.chunkX}, {centerChunk.chunkY}) · 3×3 Neighborhood
+        </p>
+        <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
+          <Viewport
+            centerChunkX={centerChunk.chunkX}
+            centerChunkY={centerChunk.chunkY}
+            chunks={chunkMap ?? {}}
+          />
+          <div style={{ flexShrink: 0 }}>
+            <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>Spawn Chunk</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 48px)", gap: 4 }}>
+              {DIRECTIONS.map(({ label, dx, dy }) => {
+                const targetX = centerChunk.chunkX + dx;
+                const targetY = centerChunk.chunkY + dy;
+                const key = `${targetX}:${targetY}`;
+                const alreadySpawned = chunkMap ? key in chunkMap : false;
+                return (
+                  <Button
+                    key={label}
+                    size="sm"
+                    variant={alreadySpawned ? "outline" : "default"}
+                    disabled={spawnChunk.isPending}
+                    onClick={() =>
+                      spawnChunk.mutate(
+                        { chunkX: targetX, chunkY: targetY, biome: "grassland" },
+                        { onSuccess: () => setCenterChunk({ chunkX: targetX, chunkY: targetY }) }
+                      )
+                    }
+                    style={{ fontSize: 11, height: 36, padding: 0 }}
+                    title={`Spawn (${targetX}, ${targetY})`}
+                  >
+                    {label}
+                  </Button>
+                );
+              })}
+            </div>
+            <p style={{ fontSize: 10, color: "#4b5563", marginTop: 8 }}>
+              Outline = already spawned
+            </p>
+            {spawnChunk.isSuccess && (
+              <p style={{ fontSize: 12, color: "#4ade80", marginTop: 6 }}>Chunk spawned!</p>
+            )}
+            {spawnChunk.isError && (
+              <p style={{ fontSize: 12, color: "#f87171", marginTop: 6 }}>
+                {spawnChunk.error?.message}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Spawned chunks table */}
+      <ChunksTable onFocus={(x, y) => setCenterChunk({ chunkX: x, chunkY: y })} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // WORLD LOG TAB
 // ─────────────────────────────────────────────
 
@@ -840,13 +1194,36 @@ export default function Admin() {
       }}
     >
       <div style={{ maxWidth: 1200, margin: "0 auto" }}>
-        <div style={{ marginBottom: 24 }}>
-          <h1 style={{ fontSize: 28, fontFamily: "'Cinzel', serif", color: "#fde68a", margin: 0 }}>
-            Frogs & Gods — Admin Console
-          </h1>
-          <p style={{ color: "#6b7280", fontSize: 13, marginTop: 4 }}>
-            Game state inspector and test harness
-          </p>
+        <div style={{ marginBottom: 24, display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+          <div>
+            <h1 style={{ fontSize: 28, fontFamily: "'Cinzel', serif", color: "#fde68a", margin: 0 }}>
+              Frogs & Gods — Admin Console
+            </h1>
+            <p style={{ color: "#6b7280", fontSize: 13, marginTop: 4 }}>
+              Game state inspector and test harness
+            </p>
+          </div>
+          {import.meta.env.DEV && (
+            <button
+              onClick={() =>
+                fetch("/api/dev-login", { method: "POST", credentials: "include" })
+                  .then(() => window.location.reload())
+              }
+              style={{
+                padding: "6px 14px",
+                fontSize: 12,
+                fontFamily: "'Cinzel', serif",
+                background: "#0f1929",
+                border: "1px solid #1e2a3a",
+                borderRadius: 6,
+                color: "#4ade80",
+                cursor: "pointer",
+                letterSpacing: "0.04em",
+              }}
+            >
+              DEV LOGIN
+            </button>
+          )}
         </div>
 
         <Tabs defaultValue="frogs">
@@ -862,6 +1239,8 @@ export default function Admin() {
               <TabsTrigger value="gods">Gods</TabsTrigger>
               <TabsTrigger value="combat">Combat</TabsTrigger>
               <TabsTrigger value="loot">Loot</TabsTrigger>
+              <TabsTrigger value="world">World</TabsTrigger>
+              <TabsTrigger value="items">Items</TabsTrigger>
               <TabsTrigger value="log">World Log</TabsTrigger>
             </TabsList>
             <UxTestingDropdown />
@@ -880,6 +1259,8 @@ export default function Admin() {
             <TabsContent value="gods"><GodsTab /></TabsContent>
             <TabsContent value="combat"><CombatTab /></TabsContent>
             <TabsContent value="loot"><LootTab /></TabsContent>
+            <TabsContent value="world"><WorldTab /></TabsContent>
+            <TabsContent value="items"><ItemsTab /></TabsContent>
             <TabsContent value="log"><WorldLogTab /></TabsContent>
           </div>
         </Tabs>

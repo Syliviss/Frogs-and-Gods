@@ -6525,6 +6525,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"fastnoise-lite@npm:^1.1.1":
+  version: 1.1.1
+  resolution: "fastnoise-lite@npm:1.1.1"
+  checksum: 10c0/393aa84ea403f62162bf4792aa6b9919c9aed0ac77dddbcb5bc3efe3670eb4cb39d39a30ba8b356e85eef163f25d80dc5bd276f605f7f7d1309de8972deb2de0
+  languageName: node
+  linkType: hard
+
 "fdir@npm:^6.5.0":
   version: 6.5.0
   resolution: "fdir@npm:6.5.0"
@@ -6679,6 +6686,7 @@ __metadata:
     embla-carousel-react: "npm:^8.6.0"
     esbuild: "npm:^0.25.0"
     express: "npm:^4.21.2"
+    fastnoise-lite: "npm:^1.1.1"
     framer-motion: "npm:^12.23.22"
     input-otp: "npm:^1.4.2"
     jose: "npm:6.1.0"
