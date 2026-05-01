@@ -4531,13 +4531,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/google.maps@npm:^3.58.1":
-  version: 3.64.0
-  resolution: "@types/google.maps@npm:3.64.0"
-  checksum: 10c0/59895cade8d70d9d0b2a40b0edeea683555d117cfb4467079357eb8cc81a5e29358a6b22d4c1e3ce2618e3125ecf8853b9a108ada11a33c47f01b8db51a65d5f
-  languageName: node
-  linkType: hard
-
 "@types/hast@npm:^3.0.0, @types/hast@npm:^3.0.4":
   version: 3.0.4
   resolution: "@types/hast@npm:3.0.4"
@@ -5194,13 +5187,6 @@ __metadata:
   version: 1.0.7
   resolution: "cookie-signature@npm:1.0.7"
   checksum: 10c0/e7731ad2995ae2efeed6435ec1e22cdd21afef29d300c27281438b1eab2bae04ef0d1a203928c0afec2cee72aa36540b8747406ebe308ad23c8e8cc3c26c9c51
-  languageName: node
-  linkType: hard
-
-"cookie@npm:^1.0.2":
-  version: 1.1.1
-  resolution: "cookie@npm:1.1.1"
-  checksum: 10c0/79c4ddc0fcad9c4f045f826f42edf54bcc921a29586a4558b0898277fa89fb47be95bc384c2253f493af7b29500c830da28341274527328f18eba9f58afa112c
   languageName: node
   linkType: hard
 
@@ -6666,7 +6652,6 @@ __metadata:
     "@trpc/react-query": "npm:^11.6.0"
     "@trpc/server": "npm:^11.6.0"
     "@types/express": "npm:4.17.21"
-    "@types/google.maps": "npm:^3.58.1"
     "@types/node": "npm:^24.7.0"
     "@types/react": "npm:^19.2.1"
     "@types/react-dom": "npm:^19.2.1"
@@ -6678,7 +6663,6 @@ __metadata:
     class-variance-authority: "npm:^0.7.1"
     clsx: "npm:^2.1.1"
     cmdk: "npm:^1.1.1"
-    cookie: "npm:^1.0.2"
     date-fns: "npm:^4.1.0"
     dotenv: "npm:^17.2.2"
     drizzle-kit: "npm:^0.31.4"
@@ -6689,7 +6673,6 @@ __metadata:
     fastnoise-lite: "npm:^1.1.1"
     framer-motion: "npm:^12.23.22"
     input-otp: "npm:^1.4.2"
-    jose: "npm:6.1.0"
     lucide-react: "npm:^0.453.0"
     mysql2: "npm:^3.15.0"
     nanoid: "npm:^5.1.5"
@@ -7236,13 +7219,6 @@ __metadata:
   bin:
     jiti: lib/jiti-cli.mjs
   checksum: 10c0/79b2e96a8e623f66c1b703b98ec1b8be4500e1d217e09b09e343471bbb9c105381b83edbb979d01cef18318cc45ce6e153571b6c83122170eefa531c64b6789b
-  languageName: node
-  linkType: hard
-
-"jose@npm:6.1.0":
-  version: 6.1.0
-  resolution: "jose@npm:6.1.0"
-  checksum: 10c0/f4518579e907317e144facd15c7627acd06097bbea17735097437217498aa419564c039dd4020f6af5f2d024a7cee6b7be4648ccbbdc238aedb80a47c061217d
   languageName: node
   linkType: hard
 

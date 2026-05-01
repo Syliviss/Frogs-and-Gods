@@ -6,11 +6,7 @@ import {
   GodInterventionSchema,
   JoinPartySchema,
   PartyInviteSchema,
-  RegisterFrogSchema,
-  RegisterGodSchema,
 } from "../shared/game.schema";
-import { COOKIE_NAME } from "@shared/const";
-import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { adminRouter } from "./routers/admin";
@@ -62,48 +58,6 @@ function randomEnemy() {
 export const appRouter = router({
   system: systemRouter,
   admin: adminRouter,
-
-  // ── AUTH ──────────────────────────────────
-  auth: router({
-    me: publicProcedure.query(async (opts) => {
-      if (!opts.ctx.user) return null;
-      const frog = await getFrogByUserId(opts.ctx.user.id);
-      const god = await getGodByUserId(opts.ctx.user.id);
-      return { ...opts.ctx.user, frog: frog ?? null, god: god ?? null };
-    }),
-
-    logout: publicProcedure.mutation(({ ctx }) => {
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return { success: true } as const;
-    }),
-
-    /** Create a Frog character for the current user */
-    registerFrog: protectedProcedure
-      .input(RegisterFrogSchema)
-      .mutation(async ({ ctx, input }) => {
-        const existing = await getFrogByUserId(ctx.user.id);
-        if (existing) throw new TRPCError({ code: "CONFLICT", message: "You already have a Frog character." });
-        await createFrog({
-          userId: ctx.user.id,
-          name: input.characterName,
-        });
-        return { success: true };
-      }),
-
-    /** Create a God profile for the current user */
-    registerGod: protectedProcedure
-      .input(RegisterGodSchema)
-      .mutation(async ({ ctx, input }) => {
-        const existing = await getGodByUserId(ctx.user.id);
-        if (existing) throw new TRPCError({ code: "CONFLICT", message: "You already have a God profile." });
-        await createGod({
-          userId: ctx.user.id,
-          name: input.godName,
-        });
-        return { success: true };
-      }),
-  }),
 
   // ── FROG ──────────────────────────────────
   frog: router({
