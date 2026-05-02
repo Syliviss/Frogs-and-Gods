@@ -1,8 +1,14 @@
-import { CombatantStats } from "./combatLoop";
-
 // ─────────────────────────────────────────────
 // XP DISTRIBUTION — isolated for easy balancing
 // ─────────────────────────────────────────────
+
+export interface CombatantStats {
+  id: number; name: string;
+  hp: number; maxHp: number;
+  mp: number; maxMp: number;
+  attack: number; defense: number; speed: number;
+  level: number; xp: number; isDead: boolean;
+}
 
 export interface XpResult {
   /** Map of frogId → xp awarded */

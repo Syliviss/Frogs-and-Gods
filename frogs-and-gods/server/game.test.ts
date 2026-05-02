@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { processTurn, type CombatantStats } from "./engine/combatLoop";
-import { distributeXp, xpToNextLevel } from "./engine/xpDistributor";
+import { distributeXp, xpToNextLevel, type CombatantStats } from "./engine/xpDistributor";
 import {
-  CombatMoveSchema,
   GodInterventionSchema,
   PartyInviteSchema,
   EnemySchema,
@@ -95,136 +93,8 @@ describe("xpDistributor", () => {
 });
 
 // ─────────────────────────────────────────────
-// COMBAT ENGINE
-// ─────────────────────────────────────────────
-
-describe("combatLoop.processTurn", () => {
-  it("throws if frog is dead", () => {
-    const deadFrog = makeFrog({ isDead: true });
-    expect(() => processTurn(deadFrog, baseEnemy, "ATTACK")).toThrow();
-  });
-
-  it("ATTACK reduces enemy HP", () => {
-    const frog = makeFrog({ attack: 100, defense: 10 });
-    // Retry to account for random miss chance (8%)
-    let hitResult = null;
-    for (let i = 0; i < 30; i++) {
-      const result = processTurn({ ...frog }, { ...baseEnemy, hp: 200, maxHp: 200, defense: 0 }, "ATTACK");
-      if (!result.frogAction.missed) { hitResult = result; break; }
-    }
-    expect(hitResult).not.toBeNull();
-    expect(hitResult!.updatedEnemy.hp).toBeLessThan(200);
-  });
-
-  it("MAGIC costs MP", () => {
-    const frog = makeFrog({ mp: 50 });
-    const result = processTurn(frog, { ...baseEnemy, hp: 200, maxHp: 200 }, "MAGIC");
-    if (!result.frogAction.missed) {
-      expect(result.updatedFrog.mp).toBeLessThan(50);
-    }
-  });
-
-  it("MAGIC fails when MP is insufficient", () => {
-    const frog = makeFrog({ mp: 5 }); // Less than MAGIC_MP_COST (15)
-    const result = processTurn(frog, baseEnemy, "MAGIC");
-    expect(result.frogAction.missed).toBe(true);
-    expect(result.updatedFrog.mp).toBe(5); // MP unchanged
-  });
-
-  it("DEFEND reduces damage taken", () => {
-    // Run many trials — defending should statistically result in less damage on average
-    let defendDamage = 0;
-    let attackDamage = 0;
-    const trials = 200;
-    const strongEnemy = { ...baseEnemy, attack: 100, defense: 0 };
-    const frog = makeFrog({ defense: 5 });
-
-    for (let i = 0; i < trials; i++) {
-      const defendResult = processTurn({ ...frog }, strongEnemy, "DEFEND");
-      const attackResult = processTurn({ ...frog }, strongEnemy, "ATTACK");
-      if (defendResult.enemyAction) defendDamage += defendResult.enemyAction.damage;
-      if (attackResult.enemyAction) attackDamage += attackResult.enemyAction.damage;
-    }
-
-    // Defending should reduce average damage — allow 15% tolerance for randomness
-    const avgDefend = defendDamage / trials;
-    const avgAttack = attackDamage / trials;
-    expect(avgDefend).toBeLessThan(avgAttack * 1.15);
-  });
-
-  it("sets isDead=true when frog HP reaches 0", () => {
-    const frog = makeFrog({ hp: 1, defense: 0 });
-    const strongEnemy = { ...baseEnemy, attack: 999, defense: 0 };
-    const result = processTurn(frog, strongEnemy, "ATTACK");
-    if (result.encounterStatus === "defeat") {
-      expect(result.updatedFrog.isDead).toBe(true);
-      expect(result.updatedFrog.hp).toBe(0);
-    }
-  });
-
-  it("returns victory status when enemy HP reaches 0", () => {
-    const frog = makeFrog({ attack: 9999 });
-    const weakEnemy = { ...baseEnemy, hp: 1, defense: 0 };
-    // Retry to account for random miss chance
-    let victoryResult = null;
-    for (let i = 0; i < 30; i++) {
-      const result = processTurn({ ...frog }, { ...weakEnemy }, "ATTACK");
-      if (result.encounterStatus === "victory") {
-        victoryResult = result;
-        break;
-      }
-    }
-    expect(victoryResult).not.toBeNull();
-    expect(victoryResult!.updatedEnemy.hp).toBe(0);
-  });
-
-  it("distributes XP on victory", () => {
-    // Use MAGIC with high attack to guarantee kill even with miss chance
-    // Run multiple times to account for random miss chance
-    const frog = makeFrog({ attack: 9999, mp: 50 });
-    const weakEnemy = { ...baseEnemy, hp: 1, defense: 0, xpReward: 50 };
-    let victoryResult = null;
-    for (let i = 0; i < 20; i++) {
-      const result = processTurn({ ...frog }, { ...weakEnemy }, "ATTACK");
-      if (result.encounterStatus === "victory") {
-        victoryResult = result;
-        break;
-      }
-    }
-    expect(victoryResult).not.toBeNull();
-    expect(victoryResult!.xpResult).not.toBeNull();
-    expect(victoryResult!.xpResult!.xpAwarded[frog.id]).toBe(50);
-  });
-});
-
-// ─────────────────────────────────────────────
 // ZOD SCHEMAS
 // ─────────────────────────────────────────────
-
-describe("game.schema — CombatMoveSchema", () => {
-  it("accepts valid combat move", () => {
-    const result = CombatMoveSchema.safeParse({
-      encounterId: 1,
-      frogId: 2,
-      moveType: "ATTACK",
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects invalid moveType", () => {
-    const result = CombatMoveSchema.safeParse({
-      encounterId: 1,
-      frogId: 2,
-      moveType: "DANCE",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects missing required fields", () => {
-    const result = CombatMoveSchema.safeParse({ moveType: "ATTACK" });
-    expect(result.success).toBe(false);
-  });
-});
 
 describe("game.schema — GodInterventionSchema", () => {
   it("accepts HEAL_FROG intervention", () => {

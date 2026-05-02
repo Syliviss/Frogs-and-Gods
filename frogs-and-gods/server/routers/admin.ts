@@ -4,7 +4,6 @@ import { publicProcedure, router } from "../_core/trpc";
 import {
   bulkInsertLoot,
   countLoot,
-  createEncounter,
   createFrog,
   createItem,
   createUserWithOpenId,
@@ -14,7 +13,6 @@ import {
   listWorldMapChunks,
   getFrogById,
   getGodById,
-  getEncounterById,
   getItemStats,
   getWorldChunkStats,
   grantLootToFrog,
@@ -24,31 +22,13 @@ import {
   listAllUsers,
   listRecentItems,
   setUserRole,
-  updateEncounter,
   updateFrog,
   updateGod,
 } from "../db";
-import { processTurn } from "../engine/combatLoop";
 import { xpToNextLevel } from "../engine/xpDistributor";
-import { CombatMoveSchema, EnemySchema, GetChunksByCoordsSchema, SpawnChunkSchema, SpawnItemSchema } from "../../shared/game.schema";
+import { GetChunksByCoordsSchema, SpawnChunkSchema, SpawnItemSchema } from "../../shared/game.schema";
 import { generateChunk, WORLD_SEED } from "../utils/worldGenerator";
 import { getWorldLogEmitter } from "../websockets/worldLogEmitter";
-
-// ─────────────────────────────────────────────
-// ENEMY TEMPLATES (mirrored from routers.ts)
-// ─────────────────────────────────────────────
-
-const ADMIN_ENEMY_TEMPLATES = [
-  { id: "swamp-toad",    name: "Swamp Toad",    hp: 60,  maxHp: 60,  attack: 12, defense: 5,  xpReward: 40,  lootTier: 1 },
-  { id: "mud-golem",     name: "Mud Golem",     hp: 120, maxHp: 120, attack: 18, defense: 12, xpReward: 80,  lootTier: 3 },
-  { id: "bog-wraith",    name: "Bog Wraith",    hp: 90,  maxHp: 90,  attack: 22, defense: 8,  xpReward: 110, lootTier: 4 },
-  { id: "elder-serpent", name: "Elder Serpent", hp: 200, maxHp: 200, attack: 30, defense: 18, xpReward: 200, lootTier: 6 },
-  { id: "void-herald",   name: "Void Herald",   hp: 350, maxHp: 350, attack: 45, defense: 25, xpReward: 400, lootTier: 9 },
-];
-
-function randomAdminEnemy() {
-  return ADMIN_ENEMY_TEMPLATES[Math.floor(Math.random() * ADMIN_ENEMY_TEMPLATES.length)]!;
-}
 
 // ─────────────────────────────────────────────
 // LOOT SEED DATA — 12 rarity tiers
@@ -249,125 +229,4 @@ export const adminRouter = router({
     return listRecentItems(50);
   }),
 
-  // ── ADMIN COMBAT (bypasses user-ownership checks) ─────
-
-  startEncounterAs: publicProcedure
-    .input(z.object({
-      frogId: z.number().int().positive(),
-      enemyId: z.string().optional(),
-    }))
-    .mutation(async ({ input }) => {
-      const frog = await getFrogById(input.frogId);
-      if (!frog) throw new TRPCError({ code: "NOT_FOUND", message: "Frog not found." });
-      if (frog.isDead) throw new TRPCError({ code: "BAD_REQUEST", message: "Dead frogs cannot fight." });
-
-      const enemy = input.enemyId
-        ? ADMIN_ENEMY_TEMPLATES.find((e) => e.id === input.enemyId) ?? randomAdminEnemy()
-        : randomAdminEnemy();
-
-      const encounter = await createEncounter({
-        frogId: frog.id,
-        enemyData: JSON.stringify(enemy),
-      });
-
-      const logPayload = {
-        encounterId: encounter.id,
-        frogId: frog.id,
-        frogName: frog.name,
-        eventType: "ENCOUNTER_START",
-        message: `[Admin] ${frog.name} encounters ${enemy.name}!`,
-        timestamp: Date.now(),
-      };
-
-      await createWorldLogEvent({
-        encounterId: encounter.id,
-        frogId: frog.id,
-        eventType: "ENCOUNTER_START",
-        payload: JSON.stringify(logPayload),
-      });
-
-      getWorldLogEmitter().emit("worldEvent", logPayload);
-
-      return { encounter, enemy };
-    }),
-
-  submitMoveAs: publicProcedure
-    .input(CombatMoveSchema)
-    .mutation(async ({ input }) => {
-      const frog = await getFrogById(input.frogId);
-      if (!frog) throw new TRPCError({ code: "NOT_FOUND", message: "Frog not found." });
-      if (frog.isDead) throw new TRPCError({ code: "BAD_REQUEST", message: "Dead frogs cannot act." });
-
-      const encounter = await getEncounterById(input.encounterId);
-      if (!encounter || encounter.status !== "active") {
-        throw new TRPCError({ code: "NOT_FOUND", message: "No active encounter found." });
-      }
-
-      const enemyData = EnemySchema.parse(JSON.parse(encounter.enemyData));
-
-      const combatant = {
-        id: frog.id,
-        name: frog.name,
-        hp: frog.hp,
-        maxHp: frog.maxHp,
-        mp: frog.mp,
-        maxMp: frog.maxMp,
-        attack: frog.attack,
-        defense: frog.defense,
-        speed: frog.speed,
-        level: frog.level,
-        xp: frog.xp,
-        isDead: frog.isDead,
-      };
-
-      const turnResult = processTurn(combatant, enemyData, input.moveType);
-
-      const frogUpdates: Record<string, unknown> = {
-        hp: turnResult.updatedFrog.hp,
-        mp: turnResult.updatedFrog.mp,
-        isDead: turnResult.updatedFrog.isDead,
-      };
-
-      if (turnResult.xpResult) {
-        const xpGained = turnResult.xpResult.xpAwarded[frog.id] ?? 0;
-        frogUpdates.xp = frog.xp + xpGained;
-        if (turnResult.xpResult.leveledUp[frog.id]) {
-          frogUpdates.level = turnResult.xpResult.newLevel[frog.id];
-        }
-      }
-
-      await updateFrog(frog.id, frogUpdates as Parameters<typeof updateFrog>[1]);
-
-      await updateEncounter(encounter.id, {
-        enemyData: JSON.stringify(turnResult.updatedEnemy),
-        status: turnResult.encounterStatus,
-        currentTurn: encounter.currentTurn + 1,
-      });
-
-      const logPayload = {
-        encounterId: encounter.id,
-        frogId: frog.id,
-        frogName: frog.name,
-        eventType: "COMBAT_TURN",
-        message: `[Admin] ${turnResult.message}`,
-        damage: turnResult.frogAction.damage || undefined,
-        xpGained: turnResult.xpResult?.xpAwarded[frog.id],
-        lootDropped: turnResult.lootDropped ?? undefined,
-        timestamp: Date.now(),
-      };
-
-      await createWorldLogEvent({
-        encounterId: encounter.id,
-        frogId: frog.id,
-        eventType: "COMBAT_TURN",
-        payload: JSON.stringify(logPayload),
-      });
-
-      getWorldLogEmitter().emit("worldEvent", logPayload);
-
-      return {
-        turnResult,
-        encounter: { ...encounter, status: turnResult.encounterStatus },
-      };
-    }),
 });

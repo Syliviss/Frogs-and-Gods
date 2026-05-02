@@ -1,30 +1,6 @@
 import { z } from "zod";
 
 // ─────────────────────────────────────────────
-// COMBAT MOVES
-// ─────────────────────────────────────────────
-
-export const MoveTypeSchema = z.enum([
-  "ATTACK",
-  "MAGIC",
-  "DEFEND",
-  "FLEE",
-  "USE_ITEM",
-]);
-export type MoveType = z.infer<typeof MoveTypeSchema>;
-
-export const CombatMoveSchema = z.object({
-  encounterId: z.number().int().positive(),
-  frogId: z.number().int().positive(),
-  moveType: MoveTypeSchema,
-  /** Optional: item id when moveType === "USE_ITEM" */
-  itemId: z.number().int().positive().optional(),
-  /** Optional: target override (for multi-enemy future expansion) */
-  targetId: z.number().int().positive().optional(),
-});
-export type CombatMove = z.infer<typeof CombatMoveSchema>;
-
-// ─────────────────────────────────────────────
 // PARTY INVITES
 // ─────────────────────────────────────────────
 
