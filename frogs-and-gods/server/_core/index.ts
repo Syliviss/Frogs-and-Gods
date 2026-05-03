@@ -8,6 +8,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { attachWebSocketServer } from "../websockets/socket";
+import { heartbeat } from "../engine/heartbeat";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -58,6 +59,8 @@ async function startServer() {
   }
 
   attachWebSocketServer(server);
+  heartbeat.start();
+  console.log("[Engine] Heartbeat started — 10s tick, 500ms quiver.");
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);

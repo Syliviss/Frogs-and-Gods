@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useWorldLog } from "@/hooks/useWorldLog";
+import { useEngineLog, type EngineLogEntry } from "@/hooks/useEngineLog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -989,6 +990,126 @@ function UxTestingDropdown() {
 }
 
 // ─────────────────────────────────────────────
+// ENGINE PULSE TAB
+// ─────────────────────────────────────────────
+
+function EngineLogRow({ entry }: { entry: EngineLogEntry }) {
+  const time = new Date(entry.timestamp).toLocaleTimeString("en-US", { hour12: false });
+
+  if (entry.kind === "tick") {
+    const filledBuckets = Object.keys(entry.bucketCounts).length;
+    return (
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 10,
+          padding: "6px 10px",
+          borderRadius: 6,
+          background: "oklch(0.14 0.03 80 / 0.35)",
+          border: "1px solid oklch(0.35 0.08 80 / 0.4)",
+          marginBottom: 4,
+        }}
+      >
+        <span style={{ color: "#fde68a", fontFamily: "'Cinzel', serif", fontSize: 11, letterSpacing: "0.06em", flexShrink: 0 }}>
+          TICK
+        </span>
+        <span style={{ color: "#6b7280", fontSize: 12, flexShrink: 0 }}>{time}</span>
+        <span style={{ color: "#d1d5db", fontSize: 13 }}>
+          Resolution — <span style={{ color: "#fbbf24" }}>{entry.totalActions} action{entry.totalActions !== 1 ? "s" : ""}</span> across{" "}
+          <span style={{ color: "#fbbf24" }}>{filledBuckets}</span> bucket{filledBuckets !== 1 ? "s" : ""}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "baseline",
+        gap: 10,
+        padding: "3px 10px",
+        borderRadius: 4,
+        marginBottom: 2,
+        opacity: 0.6,
+      }}
+    >
+      <span style={{ color: "#60a5fa", fontFamily: "'Cinzel', serif", fontSize: 10, letterSpacing: "0.06em", flexShrink: 0 }}>
+        QUIVER
+      </span>
+      <span style={{ color: "#4b5563", fontSize: 11, flexShrink: 0 }}>{time}</span>
+      <span style={{ color: "#6b7280", fontSize: 12 }}>
+        Sub-tick — bucket <span style={{ color: "#93c5fd" }}>{entry.bucketId}</span>
+        <span style={{ color: "#374151" }}> / 19</span>
+      </span>
+    </div>
+  );
+}
+
+function EngineTab() {
+  const { entries, connected } = useEngineLog(300);
+  const tickCount   = entries.filter((e) => e.kind === "tick").length;
+  const quiverCount = entries.filter((e) => e.kind === "quiver").length;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+        <div>
+          <h2 style={{ fontFamily: "'Cinzel', serif", fontSize: 18, color: "#fde68a", margin: 0 }}>
+            Engine Pulse
+          </h2>
+          <p style={{ color: "#6b7280", fontSize: 13, marginTop: 4, marginBottom: 0 }}>
+            Live feed — 10s heartbeat tick and 500ms quiver sub-ticks
+          </p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", fontSize: 13, color: connected ? "#4ade80" : "#f87171" }}>
+          <StatusDot ok={connected} />
+          {connected ? "Connected" : "Disconnected"}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 12 }}>
+        {(
+          [
+            { label: "Ticks",   value: tickCount,   color: "#fbbf24" },
+            { label: "Quivers", value: quiverCount, color: "#60a5fa" },
+          ] as const
+        ).map(({ label, value, color }) => (
+          <div
+            key={label}
+            style={{
+              flex: 1,
+              background: "#0a1120",
+              border: "1px solid #1e2a3a",
+              borderRadius: 8,
+              padding: "12px 16px",
+            }}
+          >
+            <div style={{ color: "#6b7280", fontSize: 11, letterSpacing: "0.08em", fontFamily: "'Cinzel', serif" }}>
+              {label.toUpperCase()}
+            </div>
+            <div style={{ color, fontSize: 28, fontFamily: "'Cinzel', serif", marginTop: 4 }}>
+              {value}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <ScrollArea style={{ height: 500 }}>
+        {entries.length === 0 ? (
+          <p style={{ color: "#4b5563", fontSize: 13, padding: "8px 10px" }}>
+            Waiting for engine events…
+          </p>
+        ) : (
+          entries.map((entry, i) => <EngineLogRow key={i} entry={entry} />)
+        )}
+      </ScrollArea>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // ROOT ADMIN PANEL
 // ─────────────────────────────────────────────
 
@@ -1051,6 +1172,7 @@ export default function Admin() {
               <TabsTrigger value="world">World</TabsTrigger>
               <TabsTrigger value="items">Items</TabsTrigger>
               <TabsTrigger value="log">World Log</TabsTrigger>
+              <TabsTrigger value="engine">Engine</TabsTrigger>
             </TabsList>
             <UxTestingDropdown />
           </div>
@@ -1070,6 +1192,7 @@ export default function Admin() {
             <TabsContent value="world"><WorldTab /></TabsContent>
             <TabsContent value="items"><ItemsTab /></TabsContent>
             <TabsContent value="log"><WorldLogTab /></TabsContent>
+            <TabsContent value="engine"><EngineTab /></TabsContent>
           </div>
         </Tabs>
       </div>

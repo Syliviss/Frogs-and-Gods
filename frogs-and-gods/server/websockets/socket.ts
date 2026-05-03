@@ -2,6 +2,7 @@ import { Server as HttpServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { getWorldLogEmitter } from "./worldLogEmitter";
 import type { WorldLogPayload } from "../../shared/game.schema";
+import { heartbeat } from "../engine/heartbeat";
 
 // ─────────────────────────────────────────────
 // CONNECTED CLIENTS REGISTRY
@@ -54,6 +55,21 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
   emitter.on("worldEvent", (payload: WorldLogPayload) => {
     // Broadcast every combat event to ALL connected clients (Gods watch, Frogs see their own log)
     broadcast({ type: "WORLD_LOG", payload });
+  });
+
+  // ── Subscribe to engine heartbeat events ──
+  heartbeat.on("resolution", (drained: Map<number, unknown[]>) => {
+    const bucketCounts: Record<number, number> = {};
+    let totalActions = 0;
+    for (const [bucketId, actions] of drained) {
+      bucketCounts[bucketId] = actions.length;
+      totalActions += actions.length;
+    }
+    broadcast({ type: "ENGINE_TICK", timestamp: Date.now(), totalActions, bucketCounts });
+  });
+
+  heartbeat.on("subtick", (bucketId: number) => {
+    broadcast({ type: "ENGINE_QUIVER", timestamp: Date.now(), bucketId });
   });
 
   wss.on("connection", (ws: WebSocket, _req: unknown) => {

@@ -155,3 +155,13 @@ export const SpawnItemSchema = z.object({
   locationDropped: z.string().max(128).nullable().optional(),
 });
 export type SpawnItemInput = z.infer<typeof SpawnItemSchema>;
+
+// ─────────────────────────────────────────────
+// PENDING ACTION (Action Queue input)
+// ─────────────────────────────────────────────
+
+export const PendingActionSchema = z.object({
+  type: z.string().min(1),
+  payload: z.unknown(),
+});
+export type PendingAction = z.infer<typeof PendingActionSchema>;
