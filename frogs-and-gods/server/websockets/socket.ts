@@ -61,7 +61,7 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
   heartbeat.on("resolution", (drained: Map<number, unknown[]>) => {
     const bucketCounts: Record<number, number> = {};
     let totalActions = 0;
-    for (const [bucketId, actions] of drained) {
+    for (const [bucketId, actions] of Array.from(drained)) {
       bucketCounts[bucketId] = actions.length;
       totalActions += actions.length;
     }

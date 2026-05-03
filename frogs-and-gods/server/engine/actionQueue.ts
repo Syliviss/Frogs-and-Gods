@@ -62,7 +62,7 @@ export class ActionQueue {
 
   size(): number {
     let total = 0;
-    for (const arr of this.buckets.values()) total += arr.length;
+    for (const arr of Array.from(this.buckets.values())) total += arr.length;
     return total;
   }
 }

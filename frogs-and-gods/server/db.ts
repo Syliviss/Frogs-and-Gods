@@ -1,33 +1,38 @@
-import { and, count, desc, eq, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
-  InsertUser,
-  encounters,
-  frogInventory,
+  DEFAULT_FROG_STATS,
   frogs,
   gods,
   items,
-  loot,
   parties,
   partyInvites,
+  pendingActions,
+  predators,
   users,
   worldLogEvents,
   worldMapChunks,
-  type Encounter,
+  worldMapOverrides,
   type Frog,
   type God,
-  type InsertEncounter,
   type InsertFrog,
   type InsertGod,
   type InsertItem,
-  type InsertLoot,
   type InsertParty,
+  type InsertPendingAction,
+  type InsertPredator,
+  type InsertUser,
   type InsertWorldLogEvent,
   type InsertWorldMapChunk,
+  type InsertWorldMapOverride,
   type Item,
   type Party,
+  type PendingAction,
+  type Predator,
   type WorldMapChunk,
+  type WorldMapOverride,
 } from "../drizzle/schema";
+
 // ─────────────────────────────────────────────
 // DB SINGLETON
 // ─────────────────────────────────────────────
@@ -58,13 +63,9 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   const values: InsertUser = { openId: user.openId };
   const updateSet: Record<string, unknown> = {};
 
-  const textFields = ["name", "email", "loginMethod"] as const;
-  for (const field of textFields) {
-    const value = user[field];
-    if (value !== undefined) {
-      values[field] = value ?? null;
-      updateSet[field] = value ?? null;
-    }
+  if (user.name !== undefined) {
+    values.name = user.name ?? null;
+    updateSet.name = user.name ?? null;
   }
 
   if (user.lastSignedIn !== undefined) {
@@ -107,10 +108,10 @@ export async function createFrog(data: InsertFrog): Promise<void> {
   await db.insert(frogs).values(data);
 }
 
-export async function getFrogByUserId(userId: number): Promise<Frog | undefined> {
+export async function getFrogByOwnerId(ownerId: number): Promise<Frog | undefined> {
   const db = await getDb();
   if (!db) return undefined;
-  const result = await db.select().from(frogs).where(eq(frogs.userId, userId)).limit(1);
+  const result = await db.select().from(frogs).where(eq(frogs.ownerId, ownerId)).limit(1);
   return result[0] ?? undefined;
 }
 
@@ -123,7 +124,7 @@ export async function getFrogById(id: number): Promise<Frog | undefined> {
 
 export async function updateFrog(
   id: number,
-  data: Partial<Omit<Frog, "id" | "userId" | "createdAt">>
+  data: Partial<Omit<Frog, "id" | "ownerId" | "createdAt">>
 ): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
@@ -224,53 +225,11 @@ export async function acceptPartyInvite(inviteId: number, frogId: number): Promi
 
   if (!invite[0] || invite[0].status !== "pending") return null;
 
-  await db
-    .update(partyInvites)
-    .set({ status: "accepted" })
-    .where(eq(partyInvites.id, inviteId));
-
+  await db.update(partyInvites).set({ status: "accepted" }).where(eq(partyInvites.id, inviteId));
   await db.update(frogs).set({ partyId: invite[0].partyId }).where(eq(frogs.id, frogId));
 
   const party = await getPartyById(invite[0].partyId);
   return party ?? null;
-}
-
-// ─────────────────────────────────────────────
-// ENCOUNTERS
-// ─────────────────────────────────────────────
-
-export async function createEncounter(data: InsertEncounter): Promise<Encounter> {
-  const db = await getDb();
-  if (!db) throw new Error("Database unavailable");
-  await db.insert(encounters).values(data);
-  const result = await db
-    .select()
-    .from(encounters)
-    .orderBy(desc(encounters.createdAt))
-    .limit(1);
-  return result[0]!;
-}
-
-export async function getEncounterById(id: number): Promise<Encounter | undefined> {
-  const db = await getDb();
-  if (!db) return undefined;
-  const result = await db.select().from(encounters).where(eq(encounters.id, id)).limit(1);
-  return result[0] ?? undefined;
-}
-
-export async function updateEncounter(
-  id: number,
-  data: Partial<Omit<Encounter, "id" | "createdAt">>
-): Promise<void> {
-  const db = await getDb();
-  if (!db) throw new Error("Database unavailable");
-  await db.update(encounters).set(data).where(eq(encounters.id, id));
-}
-
-export async function getActiveEncounters(): Promise<Encounter[]> {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(encounters).where(eq(encounters.status, "active"));
 }
 
 // ─────────────────────────────────────────────
@@ -291,28 +250,6 @@ export async function getRecentWorldLog(limit = 50) {
     .from(worldLogEvents)
     .orderBy(desc(worldLogEvents.createdAt))
     .limit(limit);
-}
-
-// ─────────────────────────────────────────────
-// LOOT
-// ─────────────────────────────────────────────
-
-export async function getLootByTier(tier: number) {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(loot).where(eq(loot.tier, tier));
-}
-
-export async function grantLootToFrog(frogId: number, lootId: number): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
-  await db.insert(frogInventory).values({ frogId, lootId });
-}
-
-export async function getFrogInventory(frogId: number) {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(frogInventory).where(eq(frogInventory.frogId, frogId));
 }
 
 // ─────────────────────────────────────────────
@@ -341,27 +278,6 @@ export async function listAllGods() {
   const db = await getDb();
   if (!db) return [];
   return db.select().from(gods);
-}
-
-export async function listAllLoot() {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(loot).orderBy(loot.tier);
-}
-
-export async function countLoot(): Promise<number> {
-  const db = await getDb();
-  if (!db) return 0;
-  const result = await db.select().from(loot);
-  return result.length;
-}
-
-export async function bulkInsertLoot(items: InsertLoot[]): Promise<void> {
-  const db = await getDb();
-  if (!db) throw new Error("Database unavailable");
-  for (const item of items) {
-    await db.insert(loot).values(item);
-  }
 }
 
 export async function createUserWithOpenId(openId: string, name: string): Promise<number> {
@@ -393,10 +309,7 @@ export async function createWorldMapChunk(data: InsertWorldMapChunk): Promise<Wo
   return result[0]!;
 }
 
-export async function getWorldChunkStats(): Promise<{
-  totalChunks: number;
-  activeChunks: number;
-}> {
+export async function getWorldChunkStats(): Promise<{ totalChunks: number; activeChunks: number }> {
   const db = await getDb();
   if (!db) return { totalChunks: 0, activeChunks: 0 };
   const [totalResult, activeResult] = await Promise.all([
@@ -404,7 +317,7 @@ export async function getWorldChunkStats(): Promise<{
     db.select({ value: count() }).from(worldMapChunks).where(eq(worldMapChunks.isActive, true)),
   ]);
   return {
-    totalChunks: totalResult[0]?.value ?? 0,
+    totalChunks:  totalResult[0]?.value  ?? 0,
     activeChunks: activeResult[0]?.value ?? 0,
   };
 }
@@ -427,7 +340,33 @@ export async function getChunksByCoords(
 }
 
 // ─────────────────────────────────────────────
-// ITEMS (1-of-1)
+// WORLD MAP OVERRIDES
+// ─────────────────────────────────────────────
+
+export async function createWorldMapOverride(data: InsertWorldMapOverride): Promise<WorldMapOverride> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.insert(worldMapOverrides).values(data);
+  const result = await db
+    .select()
+    .from(worldMapOverrides)
+    .where(and(eq(worldMapOverrides.gridX, data.gridX), eq(worldMapOverrides.gridY, data.gridY)))
+    .orderBy(desc(worldMapOverrides.createdAt))
+    .limit(1);
+  return result[0]!;
+}
+
+export async function getOverridesByChunk(chunkX: number, chunkY: number): Promise<WorldMapOverride[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(worldMapOverrides)
+    .where(and(eq(worldMapOverrides.chunkX, chunkX), eq(worldMapOverrides.chunkY, chunkY)));
+}
+
+// ─────────────────────────────────────────────
+// ITEMS (vault — 1-of-1)
 // ─────────────────────────────────────────────
 
 export async function createItem(data: InsertItem): Promise<Item> {
@@ -444,28 +383,77 @@ export async function listRecentItems(limit = 50): Promise<Item[]> {
   return db.select().from(items).orderBy(desc(items.createdAt)).limit(limit);
 }
 
-export async function getItemStats(): Promise<{
-  totalItems: number;
-  itemsByTier: Record<number, number>;
-}> {
+export async function getItemStats(): Promise<{ totalItems: number; itemsByTier: Record<number, number> }> {
   const db = await getDb();
   if (!db) return { totalItems: 0, itemsByTier: {} };
 
   const [totalResult, byTierResult] = await Promise.all([
     db.select({ value: count() }).from(items),
-    db.select({
-      tier: items.rarityTier,
-      cnt: count(),
-    }).from(items).groupBy(items.rarityTier),
+    db.select({ tier: items.rarityTier, cnt: count() }).from(items).groupBy(items.rarityTier),
   ]);
 
   const itemsByTier: Record<number, number> = {};
-  for (const row of byTierResult) {
-    itemsByTier[row.tier] = row.cnt;
-  }
+  for (const row of byTierResult) itemsByTier[row.tier] = row.cnt;
 
-  return {
-    totalItems: totalResult[0]?.value ?? 0,
-    itemsByTier,
-  };
+  return { totalItems: totalResult[0]?.value ?? 0, itemsByTier };
+}
+
+// ─────────────────────────────────────────────
+// PENDING ACTIONS
+// ─────────────────────────────────────────────
+
+export async function createPendingAction(data: InsertPendingAction): Promise<PendingAction> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.insert(pendingActions).values(data);
+  const result = await db
+    .select()
+    .from(pendingActions)
+    .where(eq(pendingActions.id, data.id ?? 0))
+    .orderBy(desc(pendingActions.createdAt))
+    .limit(1);
+  return result[0]!;
+}
+
+export async function getPendingActionsByTick(lockedInTick: number): Promise<PendingAction[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(pendingActions)
+    .where(and(eq(pendingActions.lockedInTick, lockedInTick), eq(pendingActions.status, "pending")));
+}
+
+export async function resolvePendingActions(lockedInTick: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(pendingActions)
+    .set({ status: "resolved" })
+    .where(and(eq(pendingActions.lockedInTick, lockedInTick), eq(pendingActions.status, "pending")));
+}
+
+// ─────────────────────────────────────────────
+// PREDATORS
+// ─────────────────────────────────────────────
+
+export async function createPredator(data: InsertPredator): Promise<Predator> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.insert(predators).values(data);
+  const result = await db
+    .select()
+    .from(predators)
+    .orderBy(desc(predators.createdAt))
+    .limit(1);
+  return result[0]!;
+}
+
+export async function getPredatorsByChunk(chunkX: number, chunkY: number): Promise<Predator[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(predators)
+    .where(and(eq(predators.chunkX, chunkX), eq(predators.chunkY, chunkY)));
 }

@@ -1,10 +1,11 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
+  CreateFrogSchema,
   CreatePartySchema,
-  GodInterventionSchema,
   JoinPartySchema,
   PartyInviteSchema,
+  type FrogSpecies,
 } from "../shared/game.schema";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
@@ -15,20 +16,28 @@ import {
   createGod,
   createParty,
   createPartyInvite,
-  createWorldLogEvent,
-  getEncounterById,
   getFrogById,
-  getFrogByUserId,
-  getFrogInventory,
+  getFrogByOwnerId,
   getFrogsByPartyId,
   getGodByUserId,
   getPendingInvitesForFrog,
   getRecentWorldLog,
-  updateEncounter,
   updateFrog,
-  updateGod,
 } from "./db";
-import { getWorldLogEmitter } from "./websockets/worldLogEmitter";
+import type { FrogStats } from "../drizzle/schema";
+
+// ─────────────────────────────────────────────
+// SPECIES STAT MODIFIERS
+// ─────────────────────────────────────────────
+
+const SPECIES_MODIFIERS: Record<FrogSpecies, Partial<FrogStats>> = {
+  BULL_FROG:        { str: 1, maxHp: 1 },
+  TREE_FROG:        { dex: 2 },
+  SHAMEN_FROG:      { maxMana: 1, int: 1 },
+  OLD_FROG:         { maxHp: -2, str: -2, wis: 3, maxMana: 2 },
+  GUIRO_FROG:       { cha: 4 },
+  POISON_DART_FROG: {},
+};
 
 // ─────────────────────────────────────────────
 // APP ROUTER
@@ -36,12 +45,12 @@ import { getWorldLogEmitter } from "./websockets/worldLogEmitter";
 
 export const appRouter = router({
   system: systemRouter,
-  admin: adminRouter,
+  admin:  adminRouter,
 
   // ── FROG ──────────────────────────────────
   frog: router({
     myFrog: protectedProcedure.query(async ({ ctx }) => {
-      return getFrogByUserId(ctx.user.id) ?? null;
+      return getFrogByOwnerId(ctx.user.id) ?? null;
     }),
 
     getFrogById: protectedProcedure
@@ -50,11 +59,37 @@ export const appRouter = router({
         return getFrogById(input.id) ?? null;
       }),
 
-    getInventory: protectedProcedure.query(async ({ ctx }) => {
-      const frog = await getFrogByUserId(ctx.user.id);
-      if (!frog) throw new TRPCError({ code: "NOT_FOUND", message: "No Frog character found." });
-      return getFrogInventory(frog.id);
-    }),
+    create: protectedProcedure
+      .input(CreateFrogSchema)
+      .mutation(async ({ ctx, input }) => {
+        const existing = await getFrogByOwnerId(ctx.user.id);
+        if (existing && !existing.isDead) {
+          throw new TRPCError({ code: "CONFLICT", message: "You already have an active Frog." });
+        }
+
+        const mods = SPECIES_MODIFIERS[input.species];
+        const base = input.distributedStats;
+        const finalStats: FrogStats = {
+          maxHp:   Math.max(1, base.maxHp   + (mods.maxHp   ?? 0)),
+          maxMana: Math.max(1, base.maxMana  + (mods.maxMana ?? 0)),
+          str:     Math.max(1, base.str      + (mods.str     ?? 0)),
+          dex:     Math.max(1, base.dex      + (mods.dex     ?? 0)),
+          wis:     Math.max(1, base.wis      + (mods.wis     ?? 0)),
+          int:     Math.max(1, base.int      + (mods.int     ?? 0)),
+          cha:     Math.max(1, base.cha      + (mods.cha     ?? 0)),
+        };
+
+        await createFrog({
+          ownerId:      ctx.user.id,
+          name:         input.name,
+          gridX:        0,
+          gridY:        0,
+          statsJson:    finalStats,
+          currentHp:    finalStats.maxHp,
+          currentMana:  finalStats.maxMana,
+        });
+        return { success: true };
+      }),
   }),
 
   // ── GOD ───────────────────────────────────
@@ -63,107 +98,13 @@ export const appRouter = router({
       return getGodByUserId(ctx.user.id) ?? null;
     }),
 
-    /** God intervenes in an active encounter */
-    intervene: protectedProcedure
-      .input(GodInterventionSchema)
+    register: protectedProcedure
+      .input(z.object({ name: z.string().min(2).max(64) }))
       .mutation(async ({ ctx, input }) => {
-        const god = await getGodByUserId(ctx.user.id);
-        if (!god) throw new TRPCError({ code: "FORBIDDEN", message: "You are not a God." });
-
-        const INTERVENTION_COST = 20;
-        if (god.divinePower < INTERVENTION_COST) {
-          throw new TRPCError({ code: "FORBIDDEN", message: "Insufficient divine power." });
-        }
-
-        const encounter = await getEncounterById(input.encounterId);
-        if (!encounter || encounter.status !== "active") {
-          throw new TRPCError({ code: "NOT_FOUND", message: "No active encounter found." });
-        }
-
-        const enemyData = JSON.parse(encounter.enemyData);
-        let message = "";
-        let updatedEnemyData = enemyData;
-
-        if (input.interventionType === "HEAL_FROG") {
-          const targetId = input.targetFrogId ?? encounter.frogId;
-          if (!targetId) throw new TRPCError({ code: "BAD_REQUEST", message: "No frog target." });
-          const frog = await getFrogById(targetId);
-          if (!frog || frog.isDead) throw new TRPCError({ code: "NOT_FOUND", message: "Frog not found or is dead." });
-
-          const healAmount = Math.round(input.magnitude * 1.5);
-          const newHp = Math.min(frog.maxHp, frog.hp + healAmount);
-          await updateFrog(frog.id, { hp: newHp });
-          message = `${god.name} channels divine light — ${frog.name} is healed for ${healAmount} HP!`;
-
-          await createWorldLogEvent({
-            encounterId: input.encounterId,
-            frogId: frog.id,
-            godId: god.id,
-            eventType: "HEAL_FROG",
-            payload: JSON.stringify({
-              encounterId: input.encounterId,
-              frogId: frog.id,
-              frogName: frog.name,
-              godId: god.id,
-              godName: god.name,
-              eventType: "HEAL_FROG",
-              message,
-              heal: healAmount,
-              timestamp: Date.now(),
-            }),
-          });
-
-          getWorldLogEmitter().emit("worldEvent", {
-            encounterId: input.encounterId,
-            frogId: frog.id,
-            frogName: frog.name,
-            godId: god.id,
-            godName: god.name,
-            eventType: "HEAL_FROG",
-            message,
-            heal: healAmount,
-            timestamp: Date.now(),
-          });
-        } else if (input.interventionType === "SMITE_ENEMY") {
-          const smiteDamage = Math.round(input.magnitude * 2.5);
-          const newEnemyHp = Math.max(0, enemyData.hp - smiteDamage);
-          updatedEnemyData = { ...enemyData, hp: newEnemyHp };
-          await updateEncounter(encounter.id, { enemyData: JSON.stringify(updatedEnemyData) });
-          message = `${god.name} smites ${enemyData.name} with divine wrath for ${smiteDamage} damage!`;
-
-          await createWorldLogEvent({
-            encounterId: input.encounterId,
-            godId: god.id,
-            eventType: "SMITE_ENEMY",
-            payload: JSON.stringify({
-              encounterId: input.encounterId,
-              godId: god.id,
-              godName: god.name,
-              eventType: "SMITE_ENEMY",
-              message,
-              damage: smiteDamage,
-              timestamp: Date.now(),
-            }),
-          });
-
-          getWorldLogEmitter().emit("worldEvent", {
-            encounterId: input.encounterId,
-            godId: god.id,
-            godName: god.name,
-            eventType: "SMITE_ENEMY",
-            message,
-            damage: smiteDamage,
-            timestamp: Date.now(),
-          });
-        }
-
-        // Deduct divine power
-        await updateGod(god.id, {
-          divinePower: god.divinePower - INTERVENTION_COST,
-          totalInterventions: god.totalInterventions + 1,
-        });
-
-        return { success: true, message };
+        const existing = await getGodByUserId(ctx.user.id);
+        if (existing) throw new TRPCError({ code: "CONFLICT", message: "You are already a God." });
+        await createGod({ userId: ctx.user.id, name: input.name });
+        return { success: true };
       }),
   }),
 
@@ -172,7 +113,7 @@ export const appRouter = router({
     create: protectedProcedure
       .input(CreatePartySchema)
       .mutation(async ({ ctx, input }) => {
-        const frog = await getFrogByUserId(ctx.user.id);
+        const frog = await getFrogByOwnerId(ctx.user.id);
         if (!frog) throw new TRPCError({ code: "FORBIDDEN", message: "Only Frogs can create parties." });
         if (frog.isDead) throw new TRPCError({ code: "FORBIDDEN", message: "Dead Frogs cannot create parties." });
 
@@ -184,7 +125,7 @@ export const appRouter = router({
     invite: protectedProcedure
       .input(PartyInviteSchema)
       .mutation(async ({ ctx, input }) => {
-        const frog = await getFrogByUserId(ctx.user.id);
+        const frog = await getFrogByOwnerId(ctx.user.id);
         if (!frog || !frog.partyId) throw new TRPCError({ code: "FORBIDDEN", message: "You must be in a party to invite." });
         if (frog.partyId !== input.partyId) throw new TRPCError({ code: "FORBIDDEN", message: "You can only invite to your own party." });
 
@@ -202,7 +143,7 @@ export const appRouter = router({
     join: protectedProcedure
       .input(JoinPartySchema)
       .mutation(async ({ ctx, input }) => {
-        const frog = await getFrogByUserId(ctx.user.id);
+        const frog = await getFrogByOwnerId(ctx.user.id);
         if (!frog) throw new TRPCError({ code: "FORBIDDEN", message: "Only Frogs can join parties." });
         if (frog.isDead) throw new TRPCError({ code: "FORBIDDEN", message: "Dead Frogs cannot join parties." });
 
@@ -212,14 +153,14 @@ export const appRouter = router({
       }),
 
     myParty: protectedProcedure.query(async ({ ctx }) => {
-      const frog = await getFrogByUserId(ctx.user.id);
+      const frog = await getFrogByOwnerId(ctx.user.id);
       if (!frog || !frog.partyId) return null;
       const members = await getFrogsByPartyId(frog.partyId);
       return { partyId: frog.partyId, members };
     }),
 
     pendingInvites: protectedProcedure.query(async ({ ctx }) => {
-      const frog = await getFrogByUserId(ctx.user.id);
+      const frog = await getFrogByOwnerId(ctx.user.id);
       if (!frog) return [];
       return getPendingInvitesForFrog(frog.id);
     }),
@@ -233,7 +174,7 @@ export const appRouter = router({
         const events = await getRecentWorldLog(input.limit);
         return events.map((e) => ({
           ...e,
-          payload: JSON.parse(e.payload),
+          payload: JSON.parse(e.payload) as unknown,
         }));
       }),
   }),

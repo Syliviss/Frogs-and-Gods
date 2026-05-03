@@ -3,7 +3,7 @@ import { distributeXp, xpToNextLevel, type CombatantStats } from "./engine/xpDis
 import {
   GodInterventionSchema,
   PartyInviteSchema,
-  EnemySchema,
+  PredatorSchema,
 } from "../shared/game.schema";
 
 // ─────────────────────────────────────────────
@@ -99,7 +99,8 @@ describe("xpDistributor", () => {
 describe("game.schema — GodInterventionSchema", () => {
   it("accepts HEAL_FROG intervention", () => {
     const result = GodInterventionSchema.safeParse({
-      encounterId: 1,
+      chunkX: 0,
+      chunkY: 0,
       interventionType: "HEAL_FROG",
       targetFrogId: 3,
       magnitude: 25,
@@ -109,7 +110,8 @@ describe("game.schema — GodInterventionSchema", () => {
 
   it("accepts SMITE_ENEMY intervention", () => {
     const result = GodInterventionSchema.safeParse({
-      encounterId: 1,
+      chunkX: 1,
+      chunkY: -2,
       interventionType: "SMITE_ENEMY",
       magnitude: 50,
     });
@@ -118,7 +120,8 @@ describe("game.schema — GodInterventionSchema", () => {
 
   it("rejects unknown intervention type", () => {
     const result = GodInterventionSchema.safeParse({
-      encounterId: 1,
+      chunkX: 0,
+      chunkY: 0,
       interventionType: "GRANT_IMMORTALITY",
       magnitude: 100,
     });
@@ -127,7 +130,8 @@ describe("game.schema — GodInterventionSchema", () => {
 
   it("rejects magnitude above 100", () => {
     const result = GodInterventionSchema.safeParse({
-      encounterId: 1,
+      chunkX: 0,
+      chunkY: 0,
       interventionType: "SMITE_ENEMY",
       magnitude: 999,
     });
@@ -147,19 +151,27 @@ describe("game.schema — PartyInviteSchema", () => {
   });
 });
 
-describe("game.schema — EnemySchema", () => {
-  it("accepts valid enemy data", () => {
-    const result = EnemySchema.safeParse(baseEnemy);
+describe("game.schema — PredatorSchema", () => {
+  const basePredator = {
+    enemyType: "SNAKE",
+    aiType:    "HUNTER",
+    gridX:     32,
+    gridY:     16,
+    currentHp: 60,
+  };
+
+  it("accepts valid predator data", () => {
+    const result = PredatorSchema.safeParse(basePredator);
     expect(result.success).toBe(true);
   });
 
-  it("rejects lootTier > 12", () => {
-    const result = EnemySchema.safeParse({ ...baseEnemy, lootTier: 13 });
+  it("rejects unknown enemy type", () => {
+    const result = PredatorSchema.safeParse({ ...basePredator, enemyType: "DRAGON" });
     expect(result.success).toBe(false);
   });
 
-  it("rejects negative HP", () => {
-    const result = EnemySchema.safeParse({ ...baseEnemy, hp: -1 });
+  it("rejects non-positive currentHp", () => {
+    const result = PredatorSchema.safeParse({ ...basePredator, currentHp: 0 });
     expect(result.success).toBe(false);
   });
 });

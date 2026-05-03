@@ -17,16 +17,16 @@ async function main() {
     itemId,
     name: "The Sacred Lily Pad",
     rarityTier: 12,
-    statsJson: JSON.stringify({
+    statsJson: {
       attackBonus: 50,
       defenseBonus: 40,
       hpBonus: 200,
-      mpBonus: 100,
-      specialAbility: "Ribbit of Doom",
-    }),
+      actionType: "ACTION_RIBBIT_OF_DOOM",
+    },
     ownerType: "world_drop",
     ownerId: undefined,
-    locationDropped: "chunk:0:0",
+    gridX: 0,
+    gridY: 0,
   });
   console.log(`[seed] Item created: ${item.itemId} — "${item.name}" (Tier ${item.rarityTier})`);
 

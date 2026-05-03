@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Viewport } from "@/components/Viewport";
+import { FrogCreationPanel } from "./FrogCreationForm";
 
 // ─────────────────────────────────────────────
 // HELPERS
@@ -64,7 +65,7 @@ function UsersTab() {
             <tr style={{ borderBottom: "1px solid #1e2a3a", color: "#9ca3af", textAlign: "left" }}>
               <th style={{ padding: "6px 10px" }}>ID</th>
               <th style={{ padding: "6px 10px" }}>Name</th>
-              <th style={{ padding: "6px 10px" }}>Email</th>
+              <th style={{ padding: "6px 10px" }}>OpenID</th>
               <th style={{ padding: "6px 10px" }}>Role</th>
               <th style={{ padding: "6px 10px" }}>Actions</th>
             </tr>
@@ -74,7 +75,7 @@ function UsersTab() {
               <tr key={u.id} style={{ borderBottom: "1px solid #0f1929" }}>
                 <td style={{ padding: "6px 10px", color: "#6b7280" }}>{u.id}</td>
                 <td style={{ padding: "6px 10px" }}>{u.name ?? "—"}</td>
-                <td style={{ padding: "6px 10px", color: "#6b7280" }}>{u.email ?? "—"}</td>
+                <td style={{ padding: "6px 10px", color: "#6b7280", fontFamily: "monospace", fontSize: 11 }}>{u.openId.slice(0, 20)}…</td>
                 <td style={{ padding: "6px 10px" }}>
                   <Badge
                     variant="outline"
@@ -117,34 +118,43 @@ function UsersTab() {
 function FrogsTab() {
   const { data: frogs, refetch } = trpc.admin.listFrogs.useQuery();
   const createFrog = trpc.admin.createTestFrog.useMutation({ onSuccess: () => refetch() });
-  const grantXp = trpc.admin.grantXp.useMutation({ onSuccess: () => refetch() });
-  const resurrect = trpc.admin.resurrectFrog.useMutation({ onSuccess: () => refetch() });
+  const grantXp    = trpc.admin.grantXp.useMutation({ onSuccess: () => refetch() });
+  const resurrect  = trpc.admin.resurrectFrog.useMutation({ onSuccess: () => refetch() });
 
-  const [newFrogName, setNewFrogName] = useState("");
-  const [xpAmounts, setXpAmounts] = useState<Record<number, string>>({});
+  const [spawnOpen, setSpawnOpen] = useState(false);
+  const [spawnError, setSpawnError] = useState<string | null>(null);
+  const [xpAmounts, setXpAmounts]   = useState<Record<number, string>>({});
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <Label style={{ fontSize: 12, color: "#9ca3af" }}>Create Test Frog</Label>
-          <Input
-            placeholder="Character name"
-            value={newFrogName}
-            onChange={(e) => setNewFrogName(e.target.value)}
-            style={{ width: 200, fontSize: 13 }}
-          />
-        </div>
+
+      {/* ── Spawn toggle ── */}
+      <div>
         <Button
           size="sm"
-          disabled={!newFrogName.trim() || createFrog.isPending}
-          onClick={() => {
-            createFrog.mutate({ name: newFrogName.trim() });
-            setNewFrogName("");
-          }}
+          variant="outline"
+          onClick={() => { setSpawnOpen((o) => !o); setSpawnError(null); }}
+          style={{ fontSize: 12, fontFamily: "monospace" }}
         >
-          Spawn Frog
+          {spawnOpen ? "▲ Hide Spawn Form" : "▼ Spawn Frog"}
         </Button>
+
+        {spawnOpen && (
+          <div style={{ marginTop: 12, maxWidth: 480 }}>
+            <FrogCreationPanel
+              onSubmit={(data) => {
+                setSpawnError(null);
+                createFrog.mutate(data, {
+                  onSuccess: () => { refetch(); setSpawnOpen(false); },
+                  onError:   (e) => setSpawnError(e.message),
+                });
+              }}
+              isPending={createFrog.isPending}
+              error={spawnError}
+              submitLabel="[ Spawn Test Frog ]"
+            />
+          </div>
+        )}
       </div>
 
       <p style={{ color: "#9ca3af", fontSize: 13 }}>
@@ -160,9 +170,9 @@ function FrogsTab() {
               <th style={{ padding: "6px 8px" }}>Lvl</th>
               <th style={{ padding: "6px 8px" }}>XP</th>
               <th style={{ padding: "6px 8px" }}>HP</th>
-              <th style={{ padding: "6px 8px" }}>MP</th>
-              <th style={{ padding: "6px 8px" }}>ATK</th>
-              <th style={{ padding: "6px 8px" }}>DEF</th>
+              <th style={{ padding: "6px 8px" }}>Mana</th>
+              <th style={{ padding: "6px 8px" }}>Position</th>
+              <th style={{ padding: "6px 8px" }}>Condition</th>
               <th style={{ padding: "6px 8px" }}>Status</th>
               <th style={{ padding: "6px 8px" }}>Grant XP</th>
               <th style={{ padding: "6px 8px" }}>Actions</th>
@@ -180,11 +190,11 @@ function FrogsTab() {
                 <td style={{ padding: "6px 8px", color: "#6b7280" }}>{f.id}</td>
                 <td style={{ padding: "6px 8px" }}>{f.name}</td>
                 <td style={{ padding: "6px 8px", color: "#60a5fa" }}>{f.level}</td>
-                <td style={{ padding: "6px 8px", color: "#9ca3af" }}>{f.xp}/{f.xpToNextLevel}</td>
-                <td style={{ padding: "6px 8px", color: "#4ade80" }}>{f.hp}/{f.maxHp}</td>
-                <td style={{ padding: "6px 8px", color: "#818cf8" }}>{f.mp}/{f.maxMp}</td>
-                <td style={{ padding: "6px 8px" }}>{f.attack}</td>
-                <td style={{ padding: "6px 8px" }}>{f.defense}</td>
+                <td style={{ padding: "6px 8px", color: "#9ca3af" }}>{f.currentXp}/{f.xpToNextLevel}</td>
+                <td style={{ padding: "6px 8px", color: "#4ade80" }}>{f.currentHp}/{f.statsJson.maxHp}</td>
+                <td style={{ padding: "6px 8px", color: "#818cf8" }}>{f.currentMana}/{f.statsJson.maxMana}</td>
+                <td style={{ padding: "6px 8px", color: "#6b7280", fontFamily: "monospace", fontSize: 11 }}>({f.gridX},{f.gridY})</td>
+                <td style={{ padding: "6px 8px", color: "#9ca3af", fontSize: 11 }}>{f.currentCondition}</td>
                 <td style={{ padding: "6px 8px" }}>
                   {f.isDead ? (
                     <Badge variant="destructive" style={{ fontSize: 10 }}>DEAD</Badge>
@@ -306,127 +316,21 @@ function GodsTab() {
 }
 
 // ─────────────────────────────────────────────
-// LOOT TAB
+// LOOT TAB  (legacy removed — use Items tab)
 // ─────────────────────────────────────────────
 
 function LootTab() {
-  const { data: lootItems, refetch } = trpc.admin.listLoot.useQuery();
-  const { data: frogs } = trpc.admin.listFrogs.useQuery();
-  const seedLoot = trpc.admin.seedLoot.useMutation({ onSuccess: () => refetch() });
-  const grantLoot = trpc.admin.grantLoot.useMutation();
-
-  const [grantFrogId, setGrantFrogId] = useState<string>("");
-  const [grantLootId, setGrantLootId] = useState<string>("");
-
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-        <Button
-          size="sm"
-          disabled={seedLoot.isPending}
-          onClick={() => seedLoot.mutate()}
-        >
-          Seed 12-Tier Loot Table
-        </Button>
-        {seedLoot.data && (
-          <span style={{ fontSize: 12, color: seedLoot.data.success ? "#4ade80" : "#f87171" }}>
-            {seedLoot.data.message}
-          </span>
-        )}
-      </div>
-
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-        <div>
-          <Label style={{ fontSize: 11, color: "#6b7280" }}>Frog</Label>
-          <select
-            value={grantFrogId}
-            onChange={(e) => setGrantFrogId(e.target.value)}
-            style={{
-              display: "block", marginTop: 4, padding: "6px 8px",
-              background: "#0f1929", border: "1px solid #1e2a3a",
-              borderRadius: 6, color: "#e2e8f0", fontSize: 13, width: 180,
-            }}
-          >
-            <option value="">Select frog...</option>
-            {frogs?.filter((f) => !f.isDead).map((f) => (
-              <option key={f.id} value={f.id}>#{f.id} {f.name}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <Label style={{ fontSize: 11, color: "#6b7280" }}>Loot Item</Label>
-          <select
-            value={grantLootId}
-            onChange={(e) => setGrantLootId(e.target.value)}
-            style={{
-              display: "block", marginTop: 4, padding: "6px 8px",
-              background: "#0f1929", border: "1px solid #1e2a3a",
-              borderRadius: 6, color: "#e2e8f0", fontSize: 13, width: 220,
-            }}
-          >
-            <option value="">Select item...</option>
-            {lootItems?.map((l) => (
-              <option key={l.id} value={l.id}>
-                [{l.rarityLabel}] {l.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <Button
-          size="sm"
-          disabled={!grantFrogId || !grantLootId || grantLoot.isPending}
-          onClick={() => {
-            grantLoot.mutate({ frogId: parseInt(grantFrogId), lootId: parseInt(grantLootId) });
-          }}
-        >
-          Grant Item
-        </Button>
-        {grantLoot.isSuccess && (
-          <span style={{ fontSize: 12, color: "#4ade80" }}>Granted!</span>
-        )}
-      </div>
-
-      <ScrollArea style={{ height: 420 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead>
-            <tr style={{ borderBottom: "1px solid #1e2a3a", color: "#9ca3af", textAlign: "left" }}>
-              <th style={{ padding: "6px 10px" }}>Tier</th>
-              <th style={{ padding: "6px 10px" }}>Rarity</th>
-              <th style={{ padding: "6px 10px" }}>Name</th>
-              <th style={{ padding: "6px 10px" }}>ATK+</th>
-              <th style={{ padding: "6px 10px" }}>DEF+</th>
-              <th style={{ padding: "6px 10px" }}>HP+</th>
-              <th style={{ padding: "6px 10px" }}>MP+</th>
-              <th style={{ padding: "6px 10px" }}>Drop%</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lootItems?.map((l) => (
-              <tr key={l.id} style={{ borderBottom: "1px solid #0f1929" }}>
-                <td style={{ padding: "6px 10px", color: "#6b7280" }}>{l.tier}</td>
-                <td style={{ padding: "6px 10px" }}>
-                  <span style={{ color: RARITY_COLORS[l.rarityLabel] ?? "#e2e8f0", fontWeight: 600 }}>
-                    {l.rarityLabel}
-                  </span>
-                </td>
-                <td style={{ padding: "6px 10px" }}>{l.name}</td>
-                <td style={{ padding: "6px 10px", color: "#f87171" }}>{l.attackBonus > 0 ? `+${l.attackBonus}` : "—"}</td>
-                <td style={{ padding: "6px 10px", color: "#60a5fa" }}>{l.defenseBonus > 0 ? `+${l.defenseBonus}` : "—"}</td>
-                <td style={{ padding: "6px 10px", color: "#4ade80" }}>{l.hpBonus > 0 ? `+${l.hpBonus}` : "—"}</td>
-                <td style={{ padding: "6px 10px", color: "#818cf8" }}>{l.mpBonus > 0 ? `+${l.mpBonus}` : "—"}</td>
-                <td style={{ padding: "6px 10px", color: "#9ca3af" }}>{(l.dropRate * 100).toFixed(1)}%</td>
-              </tr>
-            ))}
-            {(!lootItems || lootItems.length === 0) && (
-              <tr>
-                <td colSpan={8} style={{ padding: "20px 10px", textAlign: "center", color: "#4b5563", fontStyle: "italic" }}>
-                  No loot in database. Click "Seed 12-Tier Loot Table" above.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </ScrollArea>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 300, flexDirection: "column", gap: 12 }}>
+      <span style={{ fontSize: 32 }}>🏺</span>
+      <p style={{ color: "#fde68a", fontFamily: "'Cinzel', serif", fontSize: 16, margin: 0 }}>
+        Vault (Items)
+      </p>
+      <p style={{ color: "#6b7280", fontSize: 13, textAlign: "center", maxWidth: 360, margin: 0 }}>
+        The flat loot table has been retired. All items are now 1-of-1 unique objects
+        managed in the <strong style={{ color: "#9ca3af" }}>Items</strong> tab, with
+        grid coordinates, Chrono-Relic cooldowns, and JSONB action definitions.
+      </p>
     </div>
   );
 }
@@ -584,10 +488,11 @@ function ItemsTab() {
             spawnItem.mutate({
               name: "The Sacred Lily Pad",
               rarityTier: 12,
-              stats: { attackBonus: 50, defenseBonus: 40, hpBonus: 200, mpBonus: 100, specialAbility: "Ribbit of Doom" },
+              stats: { attackBonus: 50, defenseBonus: 40, hpBonus: 200, actionType: "ACTION_RIBBIT_OF_DOOM" },
               ownerType: "world_drop",
               ownerId: null,
-              locationDropped: "chunk:0:0",
+              gridX: 0,
+              gridY: 0,
             })
           }
         >
@@ -631,7 +536,9 @@ function ItemsTab() {
                   </td>
                   <td style={{ padding: "6px 8px", color: "#9ca3af" }}>{item.ownerType}</td>
                   <td style={{ padding: "6px 8px", color: "#6b7280" }}>{item.ownerId ?? "—"}</td>
-                  <td style={{ padding: "6px 8px", color: "#6b7280" }}>{item.locationDropped ?? "—"}</td>
+                  <td style={{ padding: "6px 8px", color: "#6b7280", fontFamily: "monospace", fontSize: 11 }}>
+                    {item.gridX != null ? `(${item.gridX},${item.gridY})` : "—"}
+                  </td>
                   <td style={{ padding: "6px 8px", color: "#4b5563", fontSize: 11 }}>
                     {new Date(item.createdAt).toLocaleString()}
                   </td>

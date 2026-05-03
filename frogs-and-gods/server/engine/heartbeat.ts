@@ -67,7 +67,7 @@ export class HeartbeatEngine extends EventEmitter {
     const drained = this.queue.drainAll();
 
     console.log("[HeartbeatEngine] resolution tick — bucket counts:");
-    for (const [bucketId, actions] of drained) {
+    for (const [bucketId, actions] of Array.from(drained)) {
       console.log(`  bucket ${bucketId}: ${actions.length} action(s)`);
     }
 

@@ -2,52 +2,43 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { publicProcedure, router } from "../_core/trpc";
 import {
-  bulkInsertLoot,
-  countLoot,
   createFrog,
   createItem,
   createUserWithOpenId,
-  createWorldLogEvent,
   createWorldMapChunk,
   getChunksByCoords,
-  listWorldMapChunks,
   getFrogById,
   getGodById,
   getItemStats,
   getWorldChunkStats,
-  grantLootToFrog,
   listAllFrogs,
   listAllGods,
-  listAllLoot,
   listAllUsers,
   listRecentItems,
+  listWorldMapChunks,
   setUserRole,
   updateFrog,
   updateGod,
 } from "../db";
+import type { FrogStats } from "../../drizzle/schema";
 import { xpToNextLevel } from "../engine/xpDistributor";
-import { GetChunksByCoordsSchema, SpawnChunkSchema, SpawnItemSchema } from "../../shared/game.schema";
+import {
+  CreateFrogSchema,
+  GetChunksByCoordsSchema,
+  SpawnChunkSchema,
+  SpawnItemSchema,
+  type FrogSpecies,
+} from "../../shared/game.schema";
+
+const SPECIES_MODIFIERS: Record<FrogSpecies, Partial<FrogStats>> = {
+  BULL_FROG:        { str: 1, maxHp: 1 },
+  TREE_FROG:        { dex: 2 },
+  SHAMEN_FROG:      { maxMana: 1, int: 1 },
+  OLD_FROG:         { maxHp: -2, str: -2, wis: 3, maxMana: 2 },
+  GUIRO_FROG:       { cha: 4 },
+  POISON_DART_FROG: {},
+};
 import { generateChunk, WORLD_SEED } from "../utils/worldGenerator";
-import { getWorldLogEmitter } from "../websockets/worldLogEmitter";
-
-// ─────────────────────────────────────────────
-// LOOT SEED DATA — 12 rarity tiers
-// ─────────────────────────────────────────────
-
-const LOOT_SEED = [
-  { tier: 1,  rarityLabel: "Common",              name: "Mud-Worn Stick",          attackBonus: 1,  defenseBonus: 0,  hpBonus: 0,   mpBonus: 0,  dropRate: 0.80 },
-  { tier: 2,  rarityLabel: "Uncommon",             name: "Pond-Stone Buckler",      attackBonus: 0,  defenseBonus: 2,  hpBonus: 5,   mpBonus: 0,  dropRate: 0.55 },
-  { tier: 3,  rarityLabel: "Rare",                 name: "Bogwood Blade",           attackBonus: 4,  defenseBonus: 1,  hpBonus: 0,   mpBonus: 0,  dropRate: 0.35 },
-  { tier: 4,  rarityLabel: "Epic",                 name: "Swamp Sapphire Amulet",   attackBonus: 2,  defenseBonus: 3,  hpBonus: 15,  mpBonus: 5,  dropRate: 0.22 },
-  { tier: 5,  rarityLabel: "Legendary",            name: "Thornfang Dagger",        attackBonus: 8,  defenseBonus: 2,  hpBonus: 0,   mpBonus: 10, dropRate: 0.13 },
-  { tier: 6,  rarityLabel: "Mythic",               name: "Gilded Frog Crown",       attackBonus: 5,  defenseBonus: 5,  hpBonus: 20,  mpBonus: 20, dropRate: 0.08 },
-  { tier: 7,  rarityLabel: "Celestial",            name: "Starwoven Mantle",        attackBonus: 10, defenseBonus: 8,  hpBonus: 30,  mpBonus: 15, dropRate: 0.05 },
-  { tier: 8,  rarityLabel: "Abyssal",              name: "Void-Touched Greaves",    attackBonus: 7,  defenseBonus: 12, hpBonus: 25,  mpBonus: 0,  dropRate: 0.03 },
-  { tier: 9,  rarityLabel: "Divine",               name: "Herald's Blessed Spear",  attackBonus: 18, defenseBonus: 6,  hpBonus: 10,  mpBonus: 30, dropRate: 0.02 },
-  { tier: 10, rarityLabel: "Transcendent",         name: "Rift Crystal Staff",      attackBonus: 15, defenseBonus: 10, hpBonus: 40,  mpBonus: 40, dropRate: 0.01 },
-  { tier: 11, rarityLabel: "Primordial",           name: "Primordial Fang",         attackBonus: 25, defenseBonus: 15, hpBonus: 50,  mpBonus: 25, dropRate: 0.005 },
-  { tier: 12, rarityLabel: "Mythic Transcendent",  name: "Tongue of the First God",  attackBonus: 40, defenseBonus: 25, hpBonus: 100, mpBonus: 50, dropRate: 0.001 },
-];
 
 // ─────────────────────────────────────────────
 // ADMIN ROUTER
@@ -64,7 +55,7 @@ export const adminRouter = router({
   setUserRole: publicProcedure
     .input(z.object({
       userId: z.number().int().positive(),
-      role: z.enum(["frog", "god", "admin"]),
+      role:   z.enum(["frog", "god", "admin"]),
     }))
     .mutation(async ({ input }) => {
       await setUserRole(input.userId, input.role);
@@ -78,11 +69,32 @@ export const adminRouter = router({
   }),
 
   createTestFrog: publicProcedure
-    .input(z.object({ name: z.string().min(2).max(64) }))
+    .input(CreateFrogSchema)
     .mutation(async ({ input }) => {
-      const openId = `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const userId = await createUserWithOpenId(openId, `TestUser_${input.name}`);
-      await createFrog({ userId, name: input.name });
+      const openId  = `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const ownerId = await createUserWithOpenId(openId, `TestUser_${input.name}`);
+
+      const mods = SPECIES_MODIFIERS[input.species];
+      const base = input.distributedStats;
+      const finalStats: FrogStats = {
+        maxHp:   Math.max(1, base.maxHp   + (mods.maxHp   ?? 0)),
+        maxMana: Math.max(1, base.maxMana  + (mods.maxMana ?? 0)),
+        str:     Math.max(1, base.str      + (mods.str     ?? 0)),
+        dex:     Math.max(1, base.dex      + (mods.dex     ?? 0)),
+        wis:     Math.max(1, base.wis      + (mods.wis     ?? 0)),
+        int:     Math.max(1, base.int      + (mods.int     ?? 0)),
+        cha:     Math.max(1, base.cha      + (mods.cha     ?? 0)),
+      };
+
+      await createFrog({
+        ownerId,
+        name:        input.name,
+        gridX:       0,
+        gridY:       0,
+        statsJson:   finalStats,
+        currentHp:   finalStats.maxHp,
+        currentMana: finalStats.maxMana,
+      });
       return { success: true, openId };
     }),
 
@@ -95,9 +107,9 @@ export const adminRouter = router({
       const frog = await getFrogById(input.frogId);
       if (!frog) throw new TRPCError({ code: "NOT_FOUND", message: "Frog not found." });
 
-      let newXp = frog.xp + input.amount;
+      let newXp    = frog.currentXp + input.amount;
       let newLevel = frog.level;
-      let leveled = false;
+      let leveled  = false;
 
       while (newXp >= xpToNextLevel(newLevel)) {
         newXp -= xpToNextLevel(newLevel);
@@ -106,8 +118,8 @@ export const adminRouter = router({
       }
 
       await updateFrog(frog.id, {
-        xp: newXp,
-        level: newLevel,
+        currentXp:     newXp,
+        level:         newLevel,
         xpToNextLevel: xpToNextLevel(newLevel),
       });
 
@@ -119,7 +131,12 @@ export const adminRouter = router({
     .mutation(async ({ input }) => {
       const frog = await getFrogById(input.frogId);
       if (!frog) throw new TRPCError({ code: "NOT_FOUND", message: "Frog not found." });
-      await updateFrog(frog.id, { isDead: false, hp: frog.maxHp, mp: frog.maxMp });
+      const stats = frog.statsJson;
+      await updateFrog(frog.id, {
+        isDead:      false,
+        currentHp:   stats.maxHp,
+        currentMana: stats.maxMana,
+      });
       return { success: true };
     }),
 
@@ -131,7 +148,7 @@ export const adminRouter = router({
 
   setDivinePower: publicProcedure
     .input(z.object({
-      godId: z.number().int().positive(),
+      godId:  z.number().int().positive(),
       amount: z.number().int().min(0).max(10_000),
     }))
     .mutation(async ({ input }) => {
@@ -141,34 +158,7 @@ export const adminRouter = router({
       return { success: true };
     }),
 
-  // ── LOOT ──────────────────────────────────
-
-  listLoot: publicProcedure.query(async () => {
-    return listAllLoot();
-  }),
-
-  seedLoot: publicProcedure.mutation(async () => {
-    const existing = await countLoot();
-    if (existing > 0) {
-      return { success: false, message: `Loot table already has ${existing} items. Clear it first.` };
-    }
-    await bulkInsertLoot(LOOT_SEED);
-    return { success: true, message: `Seeded ${LOOT_SEED.length} loot items.` };
-  }),
-
-  grantLoot: publicProcedure
-    .input(z.object({
-      frogId: z.number().int().positive(),
-      lootId: z.number().int().positive(),
-    }))
-    .mutation(async ({ input }) => {
-      const frog = await getFrogById(input.frogId);
-      if (!frog) throw new TRPCError({ code: "NOT_FOUND", message: "Frog not found." });
-      await grantLootToFrog(input.frogId, input.lootId);
-      return { success: true };
-    }),
-
-  // ── WORLD MAP CHUNKS & ITEMS ──────────────────
+  // ── WORLD MAP CHUNKS & ITEMS ──────────────
 
   getWorldStats: publicProcedure.query(async () => {
     const [chunkStats, itemStats] = await Promise.all([
@@ -183,10 +173,10 @@ export const adminRouter = router({
     .mutation(async ({ input }) => {
       const terrainGrid = generateChunk(input.chunkX, input.chunkY, WORLD_SEED);
       const chunk = await createWorldMapChunk({
-        chunkX: input.chunkX,
-        chunkY: input.chunkY,
-        chunkSize: input.chunkSize,
-        biome: input.biome,
+        chunkX:          input.chunkX,
+        chunkY:          input.chunkY,
+        chunkSize:       input.chunkSize,
+        biome:           input.biome,
         terrainDataJson: JSON.stringify(terrainGrid),
       });
       return { success: true, chunk };
@@ -215,12 +205,13 @@ export const adminRouter = router({
       const itemId = crypto.randomUUID();
       const item = await createItem({
         itemId,
-        name: input.name,
+        name:       input.name,
         rarityTier: input.rarityTier,
-        statsJson: JSON.stringify(input.stats),
-        ownerType: input.ownerType,
-        ownerId: input.ownerId ?? undefined,
-        locationDropped: input.locationDropped ?? undefined,
+        statsJson:  input.stats,
+        ownerType:  input.ownerType,
+        ownerId:    input.ownerId ?? undefined,
+        gridX:      input.gridX ?? undefined,
+        gridY:      input.gridY ?? undefined,
       });
       return { success: true, item };
     }),
