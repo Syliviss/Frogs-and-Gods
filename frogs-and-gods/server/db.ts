@@ -1,4 +1,4 @@
-import { and, count, desc, eq, or } from "drizzle-orm";
+import { and, count, desc, eq, gte, isNotNull, lte, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   DEFAULT_FROG_STATS,
@@ -135,6 +135,18 @@ export async function getFrogsByPartyId(partyId: number): Promise<Frog[]> {
   const db = await getDb();
   if (!db) return [];
   return db.select().from(frogs).where(eq(frogs.partyId, partyId));
+}
+
+export async function getFrogsInBounds(
+  minGX: number, maxGX: number,
+  minGY: number, maxGY: number,
+): Promise<Frog[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(frogs).where(and(
+    gte(frogs.gridX, minGX), lte(frogs.gridX, maxGX),
+    gte(frogs.gridY, minGY), lte(frogs.gridY, maxGY),
+  ));
 }
 
 // ─────────────────────────────────────────────
@@ -339,6 +351,18 @@ export async function getChunksByCoords(
   return db.select().from(worldMapChunks).where(or(...conditions));
 }
 
+export async function getChunksInBoundingBox(
+  minCX: number, maxCX: number,
+  minCY: number, maxCY: number,
+): Promise<WorldMapChunk[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(worldMapChunks).where(and(
+    gte(worldMapChunks.chunkX, minCX), lte(worldMapChunks.chunkX, maxCX),
+    gte(worldMapChunks.chunkY, minCY), lte(worldMapChunks.chunkY, maxCY),
+  ));
+}
+
 // ─────────────────────────────────────────────
 // WORLD MAP OVERRIDES
 // ─────────────────────────────────────────────
@@ -398,6 +422,20 @@ export async function getItemStats(): Promise<{ totalItems: number; itemsByTier:
   return { totalItems: totalResult[0]?.value ?? 0, itemsByTier };
 }
 
+export async function getItemsInBounds(
+  minGX: number, maxGX: number,
+  minGY: number, maxGY: number,
+): Promise<Item[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(items).where(and(
+    isNotNull(items.gridX),
+    isNotNull(items.gridY),
+    gte(items.gridX, minGX), lte(items.gridX, maxGX),
+    gte(items.gridY, minGY), lte(items.gridY, maxGY),
+  ));
+}
+
 // ─────────────────────────────────────────────
 // PENDING ACTIONS
 // ─────────────────────────────────────────────
@@ -405,32 +443,32 @@ export async function getItemStats(): Promise<{ totalItems: number; itemsByTier:
 export async function createPendingAction(data: InsertPendingAction): Promise<PendingAction> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  await db.insert(pendingActions).values(data);
-  const result = await db
-    .select()
-    .from(pendingActions)
-    .where(eq(pendingActions.id, data.id ?? 0))
-    .orderBy(desc(pendingActions.createdAt))
-    .limit(1);
+  const [{ id }] = await db.insert(pendingActions).values(data).$returningId();
+  const result = await db.select().from(pendingActions).where(eq(pendingActions.id, id)).limit(1);
   return result[0]!;
 }
 
-export async function getPendingActionsByTick(lockedInTick: number): Promise<PendingAction[]> {
+export async function getPendingActionsToResolve(currentBucket: number): Promise<PendingAction[]> {
   const db = await getDb();
   if (!db) return [];
   return db
     .select()
     .from(pendingActions)
-    .where(and(eq(pendingActions.lockedInTick, lockedInTick), eq(pendingActions.status, "pending")));
+    .where(and(eq(pendingActions.status, "pending"), lte(pendingActions.resolveBucket, currentBucket)));
 }
 
-export async function resolvePendingActions(lockedInTick: number): Promise<void> {
+export async function purgeResolvedActions(): Promise<number> {
   const db = await getDb();
-  if (!db) return;
-  await db
-    .update(pendingActions)
-    .set({ status: "resolved" })
-    .where(and(eq(pendingActions.lockedInTick, lockedInTick), eq(pendingActions.status, "pending")));
+  if (!db) return 0;
+  const result = await db.execute(
+    sql`DELETE FROM pending_actions WHERE status = 'resolved' AND resolved_at < NOW() - INTERVAL 20 SECOND`
+  );
+  const header = result[0] as { affectedRows?: number };
+  const deletedCount = header.affectedRows ?? 0;
+  if (deletedCount > 0) {
+    console.log(`[Cleanup] Purged ${deletedCount} resolved actions from the pond.`);
+  }
+  return deletedCount;
 }
 
 // ─────────────────────────────────────────────
@@ -456,4 +494,15 @@ export async function getPredatorsByChunk(chunkX: number, chunkY: number): Promi
     .select()
     .from(predators)
     .where(and(eq(predators.chunkX, chunkX), eq(predators.chunkY, chunkY)));
+}
+
+export async function getPredatorsInChunkArea(
+  coords: { chunkX: number; chunkY: number }[],
+): Promise<Predator[]> {
+  const db = await getDb();
+  if (!db || coords.length === 0) return [];
+  const conditions = coords.map((c) =>
+    and(eq(predators.chunkX, c.chunkX), eq(predators.chunkY, c.chunkY))
+  );
+  return db.select().from(predators).where(or(...conditions));
 }

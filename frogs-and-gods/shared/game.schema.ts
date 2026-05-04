@@ -228,3 +228,26 @@ export const SubmitActionSchema = z.object({
   payload:     z.record(z.string(), z.unknown()).optional(),
 });
 export type SubmitActionInput = z.infer<typeof SubmitActionSchema>;
+
+// ─────────────────────────────────────────────
+// MOVEMENT ACTION (tRPC queue path)
+// ─────────────────────────────────────────────
+
+export const MoveTypeSchema = z.enum(["STEP", "HOP", "DASH"]);
+export type MoveActionType = z.infer<typeof MoveTypeSchema>;
+
+export const MoveActionSchema = z.object({
+  actionType:  MoveTypeSchema,
+  targetGridX: z.number().int(),
+  targetGridY: z.number().int(),
+});
+export type MoveActionInput = z.infer<typeof MoveActionSchema>;
+
+// ─────────────────────────────────────────────
+// PLAYER VISION
+// ─────────────────────────────────────────────
+
+export const GetPlayerVisionSchema = z.object({
+  frogId: z.number().int().positive(),
+});
+export type GetPlayerVisionInput = z.infer<typeof GetPlayerVisionSchema>;

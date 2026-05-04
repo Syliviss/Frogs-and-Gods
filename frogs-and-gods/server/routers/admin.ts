@@ -25,10 +25,12 @@ import { xpToNextLevel } from "../engine/xpDistributor";
 import {
   CreateFrogSchema,
   GetChunksByCoordsSchema,
+  MoveTypeSchema,
   SpawnChunkSchema,
   SpawnItemSchema,
   type FrogSpecies,
 } from "../../shared/game.schema";
+import { validateAndQueueMovement } from "../engine/movement";
 
 const SPECIES_MODIFIERS: Record<FrogSpecies, Partial<FrogStats>> = {
   BULL_FROG:        { str: 1, maxHp: 1 },
@@ -219,5 +221,30 @@ export const adminRouter = router({
   listItems: publicProcedure.query(async () => {
     return listRecentItems(50);
   }),
+
+  // ── MOVEMENT (DEV) ────────────────────────
+
+  submitMovementForFrog: publicProcedure
+    .input(z.object({
+      frogId:      z.number().int().positive(),
+      actionType:  MoveTypeSchema,
+      targetGridX: z.number().int(),
+      targetGridY: z.number().int(),
+    }))
+    .mutation(async ({ input }) => {
+      const frog = await getFrogById(input.frogId);
+      if (!frog) throw new TRPCError({ code: "NOT_FOUND", message: "Frog not found." });
+      if (frog.ownerId === null) throw new TRPCError({ code: "BAD_REQUEST", message: "Frog has no owner." });
+      const result = await validateAndQueueMovement(
+        frog.ownerId,
+        input.actionType,
+        input.targetGridX,
+        input.targetGridY,
+      );
+      if (!result.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: result.message });
+      }
+      return { queued: true, pendingActionId: result.pendingActionId };
+    }),
 
 });

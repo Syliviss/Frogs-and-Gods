@@ -11,6 +11,11 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Viewport } from "@/components/Viewport";
 import { FrogCreationPanel } from "./FrogCreationForm";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TILE_REGISTRY, getTileDef } from "../../../shared/tileRegistry";
+import type { TileChar } from "../../../shared/game.schema";
+import { ActionBar } from "@/components/ActionBar";
+import { useTickSync } from "@/hooks/useTickSync";
 
 // ─────────────────────────────────────────────
 // HELPERS
@@ -574,6 +579,11 @@ const DIRECTIONS = [
 function WorldTab() {
   const utils = trpc.useUtils();
   const { data: worldStats, isLoading: statsLoading } = trpc.admin.getWorldStats.useQuery();
+  const { data: allFrogs } = trpc.admin.listFrogs.useQuery(undefined, { refetchInterval: 10_000 });
+  const frogEntities = useMemo(
+    () => (allFrogs ?? []).map((f) => ({ gridX: f.gridX, gridY: f.gridY, type: "frog" as const })),
+    [allFrogs],
+  );
 
   const [centerChunk, setCenterChunk] = useState({ chunkX: 0, chunkY: 0 });
 
@@ -641,6 +651,7 @@ function WorldTab() {
             centerChunkX={centerChunk.chunkX}
             centerChunkY={centerChunk.chunkY}
             chunks={chunkMap ?? {}}
+            entities={frogEntities}
           />
           <div style={{ flexShrink: 0 }}>
             <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>Spawn Chunk</p>
@@ -687,6 +698,209 @@ function WorldTab() {
 
       {/* Spawned chunks table */}
       <ChunksTable onFocus={(x, y) => setCenterChunk({ chunkX: x, chunkY: y })} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// VISION TAB
+// ─────────────────────────────────────────────
+
+function VisionTab() {
+  const { data: allFrogs, refetch: refetchAllFrogs } = trpc.admin.listFrogs.useQuery();
+  const [selectedFrogId, setSelectedFrogId] = useState<number | null>(null);
+
+  const selectedFrog = useMemo(
+    () => allFrogs?.find((f) => f.id === selectedFrogId) ?? null,
+    [allFrogs, selectedFrogId],
+  );
+
+  const centerChunkX = selectedFrog ? Math.floor(selectedFrog.gridX / 16) : 0;
+  const centerChunkY = selectedFrog ? Math.floor(selectedFrog.gridY / 16) : 0;
+
+  const { data: vision, refetch: refetchVision } = trpc.frog.getPlayerVision.useQuery(
+    { frogId: selectedFrogId! },
+    { enabled: selectedFrogId !== null },
+  );
+
+  const entities = useMemo(() => {
+    if (!vision) return [];
+    return [
+      ...vision.frogs.map((f) => ({ gridX: f.gridX, gridY: f.gridY, type: "frog" as const })),
+      ...vision.predators.map((p) => ({ gridX: p.gridX, gridY: p.gridY, type: "predator" as const })),
+    ];
+  }, [vision]);
+
+  const [selectedTile, setSelectedTile] = useState<{ gridX: number; gridY: number } | null>(null);
+  const [lockedIn, setLockedIn] = useState(false);
+  const submitMove = trpc.admin.submitMovementForFrog.useMutation({
+    onSuccess: () => setLockedIn(true),
+  });
+
+  useTickSync(() => {
+    console.log("Tick Resolved: Refetching Map Vision");
+    void refetchVision();
+    void refetchAllFrogs();
+    setLockedIn(false);
+  });
+
+  const lookData = useMemo(() => {
+    if (!selectedTile || !vision) return null;
+    const { gridX, gridY } = selectedTile;
+    const chunkX = Math.floor(gridX / 16);
+    const chunkY = Math.floor(gridY / 16);
+    const localX = ((gridX % 16) + 16) % 16;
+    const localY = ((gridY % 16) + 16) % 16;
+    const tileGrid = vision.chunks[`${chunkX}:${chunkY}`];
+    const tileChar = tileGrid?.[localY]?.[localX] ?? null;
+    const tileDef  = tileChar ? TILE_REGISTRY[tileChar as TileChar] : null;
+    const frogsHere     = vision.frogs.filter((f) => f.gridX === gridX && f.gridY === gridY);
+    const predatorsHere = vision.predators.filter((p) => p.gridX === gridX && p.gridY === gridY);
+    const itemsHere     = vision.items.filter((i) => i.gridX === gridX && i.gridY === gridY);
+    return { gridX, gridY, tileChar, tileDef, frogsHere, predatorsHere, itemsHere };
+  }, [selectedTile, vision]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+      {/* Frog selector */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <p style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap", margin: 0 }}>
+          Viewing Frog
+        </p>
+        <Select
+          value={selectedFrogId?.toString() ?? ""}
+          onValueChange={(v) => { setSelectedFrogId(Number(v)); setSelectedTile(null); }}
+        >
+          <SelectTrigger style={{ width: 300, background: "#0a1120", border: "1px solid #1e2a3a", color: "#e2e8f0", fontSize: 12 }}>
+            <SelectValue placeholder="— select a frog —" />
+          </SelectTrigger>
+          <SelectContent style={{ background: "#0a1120", border: "1px solid #1e2a3a" }}>
+            {(allFrogs ?? []).map((f) => (
+              <SelectItem key={f.id} value={f.id.toString()} style={{ fontSize: 12, color: "#e2e8f0" }}>
+                {f.name} — id={f.id} · ({f.gridX}, {f.gridY})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {selectedFrog && (
+          <p style={{ fontSize: 11, color: "#4b5563", margin: 0 }}>
+            chunk ({centerChunkX}, {centerChunkY}) · {selectedFrog.isDead ? "☠ dead" : `HP ${selectedFrog.currentHp}`}
+          </p>
+        )}
+      </div>
+
+      {/* Canvas + Look panel */}
+      <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+
+        <div style={{ flexShrink: 0 }}>
+          {selectedFrogId === null ? (
+            <div style={{ width: 800, height: 420, background: "#000", border: "1px solid #1e2a3a", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <p style={{ color: "#374151", fontFamily: "monospace", fontSize: 13 }}>[ select a frog to load vision ]</p>
+            </div>
+          ) : (
+            <Viewport
+              centerChunkX={centerChunkX}
+              centerChunkY={centerChunkY}
+              chunks={vision?.chunks ?? {}}
+              entities={entities}
+              selectedTile={selectedTile ?? undefined}
+              onTileClick={(gx, gy) => setSelectedTile({ gridX: gx, gridY: gy })}
+            />
+          )}
+        </div>
+
+        {/* Look panel */}
+        <div style={{ flex: 1, minWidth: 220, background: "#0a1120", border: "1px solid #1e2a3a", borderRadius: 8, padding: "14px 16px", fontFamily: "monospace", minHeight: 420 }}>
+          <p style={{ fontSize: 10, color: "#6b7280", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>
+            Look
+          </p>
+          {!lookData ? (
+            <p style={{ fontSize: 11, color: "#374151", margin: 0 }}>Click a tile to inspect it.</p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <p style={{ fontSize: 11, color: "#facc15", margin: 0 }}>
+                ({lookData.gridX}, {lookData.gridY})
+              </p>
+
+              <div>
+                <p style={{ fontSize: 10, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Terrain</p>
+                {lookData.tileDef ? (
+                  <>
+                    <p style={{ fontSize: 13, color: lookData.tileDef.color, margin: 0 }}>
+                      {lookData.tileChar} {lookData.tileDef.label}
+                    </p>
+                    <p style={{ fontSize: 11, color: "#4b5563", margin: "2px 0 0" }}>
+                      move cost: {lookData.tileDef.movementCost}
+                    </p>
+                  </>
+                ) : (
+                  <p style={{ fontSize: 11, color: "#374151", margin: 0 }}>Unknown tile (chunk not loaded)</p>
+                )}
+              </div>
+
+              <div>
+                <p style={{ fontSize: 10, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Frogs</p>
+                {lookData.frogsHere.length === 0
+                  ? <p style={{ fontSize: 11, color: "#374151", margin: 0 }}>—</p>
+                  : lookData.frogsHere.map((f) => (
+                    <p key={f.id} style={{ fontSize: 11, color: "#00ff88", margin: "2px 0" }}>
+                      ▸ {f.name} · Lv{f.level} · HP {f.currentHp}/{f.statsJson.maxHp}{f.isDead ? " ☠" : ""}
+                    </p>
+                  ))
+                }
+              </div>
+
+              <div>
+                <p style={{ fontSize: 10, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Predators</p>
+                {lookData.predatorsHere.length === 0
+                  ? <p style={{ fontSize: 11, color: "#374151", margin: 0 }}>—</p>
+                  : lookData.predatorsHere.map((p) => (
+                    <p key={p.id} style={{ fontSize: 11, color: "#ff4444", margin: "2px 0" }}>
+                      ▸ {p.enemyType} ({p.aiType}) · HP {p.currentHp}
+                    </p>
+                  ))
+                }
+              </div>
+
+              <div>
+                <p style={{ fontSize: 10, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Loot</p>
+                {lookData.itemsHere.length === 0
+                  ? <p style={{ fontSize: 11, color: "#374151", margin: 0 }}>—</p>
+                  : lookData.itemsHere.map((item) => (
+                    <p key={item.itemId} style={{ fontSize: 11, color: "#fde68a", margin: "2px 0" }}>
+                      ▸ {item.name} (T{item.rarityTier})
+                    </p>
+                  ))
+                }
+              </div>
+            </div>
+          )}
+        </div>
+
+      </div>
+
+      <ActionBar
+        selectedTile={selectedTile}
+        playerFrog={selectedFrog}
+        lockedIn={lockedIn}
+        onMove={(actionType) => {
+          if (!selectedFrogId || !selectedTile) return;
+          submitMove.mutate({
+            frogId:      selectedFrogId,
+            actionType,
+            targetGridX: selectedTile.gridX,
+            targetGridY: selectedTile.gridY,
+          });
+        }}
+        error={submitMove.error?.message}
+        tileDef={selectedTile ? getTileDef(
+          vision?.chunks[`${Math.floor(selectedTile.gridX / 16)}:${Math.floor(selectedTile.gridY / 16)}`]
+            ?.[((selectedTile.gridY % 16) + 16) % 16]
+            ?.[((selectedTile.gridX % 16) + 16) % 16] ?? ""
+        ) : null}
+      />
+
     </div>
   );
 }
@@ -1077,6 +1291,7 @@ export default function Admin() {
               <TabsTrigger value="gods">Gods</TabsTrigger>
               <TabsTrigger value="loot">Loot</TabsTrigger>
               <TabsTrigger value="world">World</TabsTrigger>
+              <TabsTrigger value="vision">Vision</TabsTrigger>
               <TabsTrigger value="items">Items</TabsTrigger>
               <TabsTrigger value="log">World Log</TabsTrigger>
               <TabsTrigger value="engine">Engine</TabsTrigger>
@@ -1097,6 +1312,7 @@ export default function Admin() {
             <TabsContent value="gods"><GodsTab /></TabsContent>
             <TabsContent value="loot"><LootTab /></TabsContent>
             <TabsContent value="world"><WorldTab /></TabsContent>
+            <TabsContent value="vision"><VisionTab /></TabsContent>
             <TabsContent value="items"><ItemsTab /></TabsContent>
             <TabsContent value="log"><WorldLogTab /></TabsContent>
             <TabsContent value="engine"><EngineTab /></TabsContent>

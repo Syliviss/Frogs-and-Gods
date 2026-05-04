@@ -3,6 +3,9 @@ import { WebSocketServer, WebSocket } from "ws";
 import { getWorldLogEmitter } from "./worldLogEmitter";
 import type { WorldLogPayload } from "../../shared/game.schema";
 import { heartbeat } from "../engine/heartbeat";
+import { processMovementActions } from "../engine/tickProcessor";
+import { validateAndQueueMovement } from "../engine/movement";
+import { purgeResolvedActions } from "../db";
 
 // ─────────────────────────────────────────────
 // CONNECTED CLIENTS REGISTRY
@@ -35,6 +38,15 @@ function broadcastToGods(data: unknown): void {
   }
 }
 
+function emitToUser(userId: number, data: unknown): void {
+  const message = JSON.stringify(data);
+  for (const client of Array.from(clients)) {
+    if (client.userId === userId && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(message);
+    }
+  }
+}
+
 // ─────────────────────────────────────────────
 // ATTACH WEBSOCKET SERVER
 // ─────────────────────────────────────────────
@@ -53,23 +65,19 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
   // ── Subscribe to World Log emitter ──
   const emitter = getWorldLogEmitter();
   emitter.on("worldEvent", (payload: WorldLogPayload) => {
-    // Broadcast every combat event to ALL connected clients (Gods watch, Frogs see their own log)
     broadcast({ type: "WORLD_LOG", payload });
   });
 
-  // ── Subscribe to engine heartbeat events ──
-  heartbeat.on("resolution", (drained: Map<number, unknown[]>) => {
-    const bucketCounts: Record<number, number> = {};
-    let totalActions = 0;
-    for (const [bucketId, actions] of Array.from(drained)) {
-      bucketCounts[bucketId] = actions.length;
-      totalActions += actions.length;
-    }
-    broadcast({ type: "ENGINE_TICK", timestamp: Date.now(), totalActions, bucketCounts });
+  // ── 500ms engine loop: process pending DB actions ──
+  heartbeat.on("subtick", () => {
+    void processMovementActions(emitToUser);
+    broadcast({ type: "ENGINE_QUIVER", timestamp: Date.now() });
   });
 
-  heartbeat.on("subtick", (bucketId: number) => {
-    broadcast({ type: "ENGINE_QUIVER", timestamp: Date.now(), bucketId });
+  // ── 10s broadcast: push ENGINE_TICK so clients refetch their vision ──
+  heartbeat.on("broadcast", () => {
+    broadcast({ type: "ENGINE_TICK", timestamp: Date.now() });
+    void purgeResolvedActions();
   });
 
   wss.on("connection", (ws: WebSocket, _req: unknown) => {
@@ -78,7 +86,6 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
 
     console.log(`[WS] Client connected. Total: ${clients.size}`);
 
-    // ── Send recent world log on connect ──
     ws.send(JSON.stringify({ type: "CONNECTED", message: "Welcome to the World Log." }));
 
     ws.on("message", (raw: Buffer | string) => {
@@ -95,15 +102,33 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
             break;
           }
 
+          // ── Frog movement — writes directly to DB queue ──
+          case "SUBMIT_ACTION": {
+            if (client.role !== "frog" || !client.userId) {
+              ws.send(JSON.stringify({ type: "ERROR", message: "Must be a frog player to submit actions." }));
+              break;
+            }
+            void validateAndQueueMovement(
+              client.userId,
+              msg.actionType,
+              msg.targetGridX,
+              msg.targetGridY,
+            ).then((result) => {
+              ws.send(JSON.stringify(
+                result.ok
+                  ? { type: "ACTION_QUEUED", pendingActionId: result.pendingActionId }
+                  : { type: "ERROR", message: result.message }
+              ));
+            });
+            break;
+          }
+
           // ── God interventions via WebSocket ──
-          // Note: Interventions can also be submitted via tRPC (preferred).
-          // This WebSocket path is for ultra-low-latency God actions.
           case "HEAL_FROG": {
             if (client.role !== "god") {
               ws.send(JSON.stringify({ type: "ERROR", message: "Only Gods can intervene." }));
               break;
             }
-            // Emit back to all clients so the World Log updates immediately
             const healPayload: WorldLogPayload = {
               encounterId: msg.encounterId,
               frogId: msg.targetFrogId,

@@ -3,10 +3,13 @@ import { z } from "zod";
 import {
   CreateFrogSchema,
   CreatePartySchema,
+  GetPlayerVisionSchema,
   JoinPartySchema,
+  MoveActionSchema,
   PartyInviteSchema,
   type FrogSpecies,
 } from "../shared/game.schema";
+import { validateAndQueueMovement } from "./engine/movement";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { adminRouter } from "./routers/admin";
@@ -16,14 +19,19 @@ import {
   createGod,
   createParty,
   createPartyInvite,
+  getChunksByCoords,
   getFrogById,
   getFrogByOwnerId,
   getFrogsByPartyId,
+  getFrogsInBounds,
   getGodByUserId,
+  getItemsInBounds,
   getPendingInvitesForFrog,
+  getPredatorsInChunkArea,
   getRecentWorldLog,
   updateFrog,
 } from "./db";
+import { CHUNK_SIZE } from "./utils/worldGenerator";
 import type { FrogStats } from "../drizzle/schema";
 
 // ─────────────────────────────────────────────
@@ -89,6 +97,59 @@ export const appRouter = router({
           currentMana:  finalStats.maxMana,
         });
         return { success: true };
+      }),
+
+    submitMovement: protectedProcedure
+      .input(MoveActionSchema)
+      .mutation(async ({ ctx, input }) => {
+        const result = await validateAndQueueMovement(
+          ctx.user.id,
+          input.actionType,
+          input.targetGridX,
+          input.targetGridY,
+        );
+        if (!result.ok) {
+          const code = result.code === "NO_FROG" || result.code === "FROG_DEAD"
+            ? "FORBIDDEN" as const
+            : "BAD_REQUEST" as const;
+          throw new TRPCError({ code, message: result.message });
+        }
+        return { queued: true, pendingActionId: result.pendingActionId };
+      }),
+
+    getPlayerVision: protectedProcedure
+      .input(GetPlayerVisionSchema)
+      .query(async ({ input }) => {
+        const frog = await getFrogById(input.frogId);
+        if (!frog) throw new TRPCError({ code: "NOT_FOUND", message: "Frog not found." });
+
+        const centerCX = Math.floor(frog.gridX / CHUNK_SIZE);
+        const centerCY = Math.floor(frog.gridY / CHUNK_SIZE);
+
+        const coords: { chunkX: number; chunkY: number }[] = [];
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++)
+            coords.push({ chunkX: centerCX + dx, chunkY: centerCY + dy });
+
+        const minGX = (centerCX - 1) * CHUNK_SIZE;
+        const maxGX = (centerCX + 2) * CHUNK_SIZE - 1;
+        const minGY = (centerCY - 1) * CHUNK_SIZE;
+        const maxGY = (centerCY + 2) * CHUNK_SIZE - 1;
+
+        const [chunkRows, frogRows, predatorRows, itemRows] = await Promise.all([
+          getChunksByCoords(coords),
+          getFrogsInBounds(minGX, maxGX, minGY, maxGY),
+          getPredatorsInChunkArea(coords),
+          getItemsInBounds(minGX, maxGX, minGY, maxGY),
+        ]);
+
+        const chunks: Record<string, string[][]> = {};
+        for (const chunk of chunkRows) {
+          if (chunk.terrainDataJson)
+            chunks[`${chunk.chunkX}:${chunk.chunkY}`] = JSON.parse(chunk.terrainDataJson) as string[][];
+        }
+
+        return { chunks, frogs: frogRows, predators: predatorRows, items: itemRows };
       }),
   }),
 

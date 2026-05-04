@@ -1,0 +1,8 @@
+Copyright (c) 2026 Baily Allen Leary
+
+All rights reserved. 
+
+This software and associated documentation files are the sole property 
+of Baily Allen Leary. No part of this software may be copied, modified, 
+redistributed, or used in any way without the express written 
+permission of the author.

@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   index,
   int,
@@ -179,16 +180,17 @@ export const pendingActions = mysqlTable("pending_actions", {
   targetGridX:  int("target_grid_x"),
   /** Target tile Y */
   targetGridY:  int("target_grid_y"),
-  /** Which 10-second window this action belongs to */
-  lockedInTick: int("locked_in_tick").notNull(),
-  /** Sub-tick bucket (0–19) from the heartbeat engine */
-  bucketId:     int("bucket_id").notNull(),
+  /** Absolute 500ms bucket at submission time: Math.floor(Date.now() / 500) */
+  resolveBucket: bigint("resolve_bucket", { mode: "number" }).notNull(),
   /** Optional extra payload (item id, target frog id, etc.) */
   payload:      json("payload"),
   status:       mysqlEnum("status", ["pending", "resolved", "cancelled"]).default("pending").notNull(),
+  /** Set when status transitions to resolved/cancelled; used for TTL purge */
+  resolvedAt:   timestamp("resolved_at"),
   createdAt:    timestamp("createdAt").defaultNow().notNull(),
 }, (table) => [
-  index("tick_status_idx").on(table.lockedInTick, table.status),
+  index("resolve_status_idx").on(table.resolveBucket, table.status),
+  index("status_resolved_at_idx").on(table.status, table.resolvedAt),
 ]);
 
 export type PendingAction       = typeof pendingActions.$inferSelect;
