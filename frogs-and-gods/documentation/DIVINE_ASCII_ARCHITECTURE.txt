@@ -45,6 +45,22 @@ world_map_chunks (
 
 All entity positions (`frogs`, `predators`, `items`) are stored as absolute world-grid coordinates (`gridX`, `gridY`). There is no "client position" concept. A frog is where the database says it is.
 
+Items additionally carry a `pixel_data` column — a 256-element JSONB array representing a 16×16 pixel art sprite:
+
+```sql
+items (
+  item_id       VARCHAR(36) PRIMARY KEY,
+  name          VARCHAR(128) NOT NULL,
+  item_state    item_state   DEFAULT 'GROUND',   -- VOID|GROUND|INVENTORY|EQUIPPED|ITEM|GOD
+  grid_x        INTEGER,
+  grid_y        INTEGER,
+  pixel_data    JSONB,  -- (string | null)[] length 256, one hex color per pixel row-major
+  ...
+)
+```
+
+Each element of `pixel_data` is a CSS hex color string (e.g. `"#ff0000"`) or `null` for a transparent pixel. The array is row-major: index `i` maps to `col = i % 16`, `row = Math.floor(i / 16)`. A null value or `"#00000000"` is treated as fully transparent. This column is nullable — items without pixel art are rendered using a fallback color.
+
 Chunk terrain is generated deterministically by a Perlin noise function seeded with a fixed constant (`WORLD_SEED = 42`). The same `(chunkX, chunkY)` coordinates will always produce the same terrain. 
 
 ---
@@ -123,8 +139,18 @@ Response:
   chunks:    Record<"cx:cy", string[][]>,  // e.g. "2:3" → 16×16 char grid
   frogs:     Frog[],                       // absolute gridX, gridY
   predators: Predator[],                   // absolute gridX, gridY
-  items:     Item[]                        // absolute gridX, gridY
+  items:     Item[]                        // absolute gridX, gridY — pixelData STRIPPED
 }
+```
+
+**Note:** `pixel_data` is explicitly stripped from the `items` array before the response is sent:
+
+```typescript
+// server/routers.ts — inside getPlayerVision
+const groundItems = itemRows.map(({ pixelData: _px, ...rest }) => rest);
+```
+
+This keeps vision payloads lean. A 256-element color array per visible item would bloat every tick response. Instead, sprite data is fetched lazily on demand via a separate tRPC query (see §6 below).
 ```
 
 All four database queries run in parallel. The response is a complete, self-contained snapshot of everything visible to the player at this moment. The client replaces its prior state entirely — there is no merging, diffing, or reconciliation. The server's answer is the truth.
@@ -145,14 +171,116 @@ The render pipeline fires inside a React `useEffect` with this dependency array:
 
 This means the canvas redraws **exactly when the server's data changes** — not on a timer, not on user input (except tile selection), not speculatively. There is no render loop. The canvas is passive.
 
-Each redraw:
+Each redraw runs four sequential passes over the same canvas context:
 
-1. **Clears** the canvas to black (`#000000`)
-2. **Iterates all 9 chunks** in the 3×3 grid, and for each of the 16×16=256 tiles per chunk, draws the ASCII character using `ctx.fillText()` in `"bold 12px monospace"` with the color from `TILE_REGISTRY`
-3. **Draws entities** as 9×9 pixel filled squares — green (`#00ff88`) for frogs, red (`#ff4444`) for predators
-4. **Draws the selected tile** highlight as a yellow (`#facc15`) 18×14 pixel outline rectangle
+**Pass 1 — Clear.** Fill the entire 800×420 canvas with black (`#000000`).
+
+**Pass 2 — Terrain.** Iterate all 9 chunks in the 3×3 grid. For each of the 16×16 = 256 tiles per chunk, draw the ASCII character (`ctx.fillText()`, `"bold 12px monospace"`) at its isometric screen position using the color from `TILE_REGISTRY`. Chunks absent from the response are silently skipped — those tiles stay black.
+
+**Pass 3 — Ground items.** Iterate the `groundItems` prop (GROUND-state items with non-null coordinates). For each item, project its world position to screen coords using the same isometric formula. Then:
+- If `spriteManager.get(item.itemId)` returns a baked canvas — draw it scaled to 24×24 pixels via `ctx.drawImage()`.
+- Otherwise — draw a **pink** (`#f472b6`) 9×9 filled square as a fallback. This covers items that have no pixel art and items whose sprite has not yet been lazy-loaded.
+
+Ground items are drawn *before* entities so frogs always appear visually on top of loot.
+
+**Pass 4 — Entities.** Draw frogs as green (`#00ff88`) 9×9 squares, predators as red (`#ff4444`) 9×9 squares. No sprite art — entities are always colored squares.
+
+**Pass 5 — Selection highlight.** If a tile is selected, draw a yellow (`#facc15`) 18×14 outline rectangle over it.
 
 No physics. No collision detection. No prediction. No interpolation (see [Burst Fluidity](#burst-fluidity-60-fps-interpolation-planned) below). The canvas is a projector and the server's data packet is the film.
+
+---
+
+### 6. Item Sprite Rendering: The Lazy-Load Pipeline
+
+Item sprites are a 16×16 pixel art overlay drawn on top of the terrain in the isometric viewport. Their data originates in the database `pixel_data` column, travels to the client in a separate on-demand query, and is rasterized into an off-screen canvas that the main `Viewport` reads from during each redraw.
+
+#### Step 1 — Database storage
+
+`pixel_data` is a JSONB column on the `items` table. Its value is a 256-element array where each entry is either a CSS hex color string or `null`:
+
+```
+pixel_data[i] → col = i % 16,  row = floor(i / 16)
+```
+
+A fully transparent pixel is represented as `null` or `"#00000000"`. The column itself is nullable — items with no pixel art have `pixel_data = NULL`.
+
+When a god creates an item via the Admin UI, they supply 256 newline-separated hex values in a textarea. The client splits on `\n`, trims whitespace, maps empty lines to `null`, and sends the resulting array as part of the `CREATE_ITEM` pending action payload.
+
+#### Step 2 — Exclusion from the vision snapshot
+
+The `getPlayerVision` tRPC handler deliberately omits `pixel_data` from its response:
+
+```typescript
+// server/routers.ts
+const groundItems = itemRows.map(({ pixelData: _px, ...rest }) => rest);
+return { chunks, frogs, predators, items: groundItems };
+```
+
+A single `pixel_data` array is up to ~6 KB of JSON. Broadcasting it for every visible item on every tick would bloat an otherwise lean payload. The vision snapshot carries enough to position and identify items — their sprites are fetched separately.
+
+#### Step 3 — Lazy fetch via `frog.getItemPixelData`
+
+When the client needs to render a sprite it doesn't yet have cached, it calls:
+
+```typescript
+frog.getItemPixelData({ itemIds: string[] })  // max 64 IDs per request
+// Returns: { itemId: string, pixelData: (string | null)[] | null }[]
+```
+
+This query is driven by item IDs visible in the current vision snapshot. The client triggers it after receiving a fresh vision response and discovering item IDs not yet present in `SpriteManager`.
+
+#### Step 4 — SpriteManager: the in-memory raster cache
+
+`client/src/lib/SpriteManager.ts` is a singleton that holds a `Map<itemId, HTMLCanvasElement>`. It has three methods:
+
+```typescript
+spriteManager.bake(itemId, pixels)  // rasterizes once, stores canvas
+spriteManager.get(itemId)           // returns canvas or undefined
+spriteManager.prune(activeItemIds)  // evicts canvases for items no longer visible
+```
+
+`bake()` creates an off-screen 16×16 `<canvas>` element, iterates the 256-element pixel array, and fills each non-null, non-transparent pixel with `ctx.fillRect(col, row, 1, 1)`. It is idempotent — calling it again for the same `itemId` is a no-op. The baked canvas is never modified after creation.
+
+`prune()` is called after each `ENGINE_TICK` vision refetch, passing the union of currently-visible ground item IDs and the player's held item IDs. Any canvas whose item ID is absent from that set is evicted from the Map, freeing the memory.
+
+#### Step 5 — Viewport rendering (Pass 3)
+
+During each `Viewport` redraw, Pass 3 iterates `groundItems` (items with non-null `gridX`/`gridY`). For each item the isometric screen position is computed and then:
+
+```
+spriteCanvas = spriteManager.get(item.itemId)
+
+if spriteCanvas:
+    ctx.drawImage(spriteCanvas, screenX - 12, screenY - 12, 24, 24)
+    // scales the 16×16 off-screen canvas to 24×24 on the main canvas
+    // imageSmoothingEnabled = false keeps pixels blocky (pixel-art quality)
+else:
+    ctx.fillStyle = "#f472b6"    // pink fallback
+    ctx.fillRect(screenX - 4, screenY - 4, 9, 9)
+```
+
+The fallback pink square is the same visual weight as the green frog / red predator squares — all entities without sprite art render as 9×9 colored squares. This means items are always visible on the map even before their sprites have been fetched or if they were never given pixel art.
+
+#### Full pipeline summary
+
+```
+DB: items.pixel_data (JSONB 256-element array)
+    │
+    │  [excluded from getPlayerVision response]
+    │
+    ▼
+frog.getItemPixelData (on-demand tRPC query, triggered by vision refetch)
+    │
+    ▼
+SpriteManager.bake(itemId, pixels)
+    → off-screen 16×16 HTMLCanvasElement, stored in Map
+    │
+    ▼
+Viewport Pass 3 — spriteManager.get(itemId)
+    → drawImage (24×24, no smoothing)   if baked
+    → fillRect  pink 9×9 square         if not baked / no pixel art
+```
 
 ---
 
