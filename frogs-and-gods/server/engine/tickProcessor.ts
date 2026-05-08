@@ -1,68 +1,88 @@
 import { eq } from "drizzle-orm";
-import { getDb, getFrogById, getChunksByCoords } from "../db";
-import { getPendingActionsToResolve } from "../db";
-import { frogs, pendingActions } from "../../drizzle/schema";
-import { calculateRemainingMove, type MoveType } from "../../shared/movement";
-import { CHUNK_SIZE } from "../utils/worldGenerator";
-import type { TileChar } from "../../shared/game.schema";
+import { getDb, getFrogById, getPendingActionsToResolve, getPendingGodActions } from "../db";
+import { pendingActions } from "../../drizzle/schema";
+import { runAction, GOD_ACTION_REGISTRY } from "../actions/index";
+import type { NotifyFn } from "../actions/_types";
+import type { GodActionContext } from "../actions/god_types";
 
-export async function processMovementActions(
-  notify: (userId: number, data: unknown) => void = () => {},
+async function processGodActions(bucket: number, notify: NotifyFn): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const godPending = await getPendingGodActions(bucket);
+  for (const action of godPending) {
+    const handler = GOD_ACTION_REGISTRY[action.actionType];
+    if (!handler) {
+      await db.update(pendingActions).set({ status: "resolved", resolvedAt: new Date() }).where(eq(pendingActions.id, action.id));
+      continue;
+    }
+    const ctx: GodActionContext = {
+      actionType: action.actionType,
+      payload:    (action.payload as Record<string, unknown>) ?? {},
+    };
+    const validation = await handler.validate(ctx);
+    if (!validation.success) {
+      console.warn(`[GodAction] ${action.actionType} validation failed: ${validation.error}`);
+      await db.update(pendingActions).set({ status: "cancelled", resolvedAt: new Date() }).where(eq(pendingActions.id, action.id));
+      continue;
+    }
+    const result = await handler.execute(ctx);
+    await handler.broadcast(ctx, result, notify);
+    await db.update(pendingActions).set({ status: "resolved", resolvedAt: new Date() }).where(eq(pendingActions.id, action.id));
+  }
+}
+
+export async function processAllActions(
+  notify: NotifyFn = () => {},
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
 
   const currentBucket = Math.floor(Date.now() / 500);
+
+  // God actions run before the frog DEX-sorted pass so items exist before frogs can act on them
+  await processGodActions(currentBucket, notify);
+
   const pending = await getPendingActionsToResolve(currentBucket);
   if (pending.length === 0) return;
 
-  for (const action of pending) {
-    if (action.actionType !== "STEP" && action.actionType !== "HOP" && action.actionType !== "DASH") {
-      await db.update(pendingActions).set({ status: "resolved", resolvedAt: new Date() }).where(eq(pendingActions.id, action.id));
-      continue;
-    }
-    if (action.targetGridX === null || action.targetGridY === null) {
-      await db.update(pendingActions).set({ status: "cancelled", resolvedAt: new Date() }).where(eq(pendingActions.id, action.id));
-      continue;
-    }
+  // Fetch DEX for each actor to sort higher-DEX frogs first
+  const dexMap = new Map<number, number>();
+  await Promise.all(
+    Array.from(new Set(pending.map((a) => a.actorId))).map(async (actorId) => {
+      const frog = await getFrogById(actorId);
+      dexMap.set(actorId, frog?.statsJson.dex ?? 0);
+    })
+  );
 
-    const frog = await getFrogById(action.actorId);
-    if (!frog || frog.isDead) {
-      await db.update(pendingActions).set({ status: "cancelled", resolvedAt: new Date() }).where(eq(pendingActions.id, action.id));
-      continue;
-    }
+  const sorted = [...pending].sort((a, b) => (dexMap.get(b.actorId) ?? 0) - (dexMap.get(a.actorId) ?? 0));
 
-    // Re-validate tile cost (double-validation intentional)
-    const chunkX  = Math.floor(action.targetGridX / CHUNK_SIZE);
-    const chunkY  = Math.floor(action.targetGridY / CHUNK_SIZE);
-    const chunks  = await getChunksByCoords([{ chunkX, chunkY }]);
-    const terrain: string[][] = chunks[0]?.terrainDataJson ? JSON.parse(chunks[0].terrainDataJson) : [];
-    const localX  = ((action.targetGridX % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const localY  = ((action.targetGridY % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const targetChar = (terrain[localY]?.[localX] ?? "#") as TileChar;
-    const moveResult = calculateRemainingMove(action.actionType as MoveType, frog.statsJson, "#" as TileChar, targetChar);
-
-    // Atomic: update frog position + mark action resolved in one transaction
-    await db.transaction(async (tx) => {
-      if (moveResult.legal) {
-        await tx.update(frogs)
-          .set({ gridX: action.targetGridX!, gridY: action.targetGridY! })
-          .where(eq(frogs.id, frog.id));
-      }
-      await tx.update(pendingActions)
-        .set({ status: moveResult.legal ? "resolved" : "cancelled", resolvedAt: new Date() })
+  for (const action of sorted) {
+    // Skip FUMBLE sentinel rows (inserted by runAction on fumble)
+    if (action.actionType === "FUMBLE") {
+      await db.update(pendingActions)
+        .set({ status: "resolved", resolvedAt: new Date() })
         .where(eq(pendingActions.id, action.id));
-    });
-
-    if (frog.ownerId !== null) {
-      notify(frog.ownerId, {
-        type:       "ACTION_RESOLVED",
-        actionId:   action.id,
-        legal:      moveResult.legal,
-        actionType: action.actionType,
-        targetGridX: action.targetGridX,
-        targetGridY: action.targetGridY,
-      });
+      continue;
     }
+
+    await runAction(
+      {
+        frogId:      action.actorId,
+        userId:      0, // userId resolved from frog.ownerId inside handlers
+        actionType:  action.actionType,
+        payload:     (action.payload as Record<string, unknown>) ?? {},
+        targetGridX: action.targetGridX ?? undefined,
+        targetGridY: action.targetGridY ?? undefined,
+      },
+      notify,
+    );
+
+    // Mark the pending_action row resolved (runAction inserts its own sentinel on fumble)
+    await db.update(pendingActions)
+      .set({ status: "resolved", resolvedAt: new Date() })
+      .where(eq(pendingActions.id, action.id));
   }
 }
+
+// Keep the old export name alive so socket.ts import doesn't break during transition
+export { processAllActions as processMovementActions };

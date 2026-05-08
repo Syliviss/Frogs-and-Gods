@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useWorldLog } from "@/hooks/useWorldLog";
@@ -15,7 +15,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { TILE_REGISTRY, getTileDef } from "../../../shared/tileRegistry";
 import type { TileChar } from "../../../shared/game.schema";
 import { ActionBar } from "@/components/ActionBar";
+import { ActionLog } from "@/components/ActionLog";
 import { useTickSync } from "@/hooks/useTickSync";
+import { useActionLogs } from "@/hooks/useActionLogs";
+import { InventoryTab } from "@/components/admin/InventoryTab";
 
 // ─────────────────────────────────────────────
 // HELPERS
@@ -126,9 +129,10 @@ function FrogsTab() {
   const grantXp    = trpc.admin.grantXp.useMutation({ onSuccess: () => refetch() });
   const resurrect  = trpc.admin.resurrectFrog.useMutation({ onSuccess: () => refetch() });
 
-  const [spawnOpen, setSpawnOpen] = useState(false);
-  const [spawnError, setSpawnError] = useState<string | null>(null);
-  const [xpAmounts, setXpAmounts]   = useState<Record<number, string>>({});
+  const [spawnOpen, setSpawnOpen]       = useState(false);
+  const [spawnError, setSpawnError]     = useState<string | null>(null);
+  const [xpAmounts, setXpAmounts]       = useState<Record<number, string>>({});
+  const [expandedFrogId, setExpandedFrogId] = useState<number | null>(null);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -185,14 +189,19 @@ function FrogsTab() {
           </thead>
           <tbody>
             {frogs?.map((f) => (
+              <Fragment key={f.id}>
               <tr
-                key={f.id}
                 style={{
                   borderBottom: "1px solid #0f1929",
                   opacity: f.isDead ? 0.5 : 1,
                 }}
               >
-                <td style={{ padding: "6px 8px", color: "#6b7280" }}>{f.id}</td>
+                <td
+                  style={{ padding: "6px 8px", color: "#6b7280", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+                  onClick={() => setExpandedFrogId((prev) => prev === f.id ? null : f.id)}
+                >
+                  {f.id} <span style={{ fontSize: 9, opacity: 0.6 }}>{expandedFrogId === f.id ? "▾" : "▸"}</span>
+                </td>
                 <td style={{ padding: "6px 8px" }}>{f.name}</td>
                 <td style={{ padding: "6px 8px", color: "#60a5fa" }}>{f.level}</td>
                 <td style={{ padding: "6px 8px", color: "#9ca3af" }}>{f.currentXp}/{f.xpToNextLevel}</td>
@@ -247,6 +256,15 @@ function FrogsTab() {
                   )}
                 </td>
               </tr>
+              {expandedFrogId === f.id && (
+                <tr style={{ background: "#080f1c" }}>
+                  <td colSpan={11} style={{ padding: "4px 12px 8px 20px" }}>
+                    <span style={{ fontSize: 11, color: "#6b7280" }}>ID: </span>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, color: "#e2e8f0" }}>{f.id}</span>
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -447,17 +465,51 @@ function ChunksTable({ onFocus }: { onFocus: (chunkX: number, chunkY: number) =>
 function ItemsTab() {
   const utils = trpc.useUtils();
   const { data: worldStats } = trpc.admin.getWorldStats.useQuery();
-  const { data: itemsList } = trpc.admin.listItems.useQuery();
+  const { data: itemsList, refetch: refetchItems } = trpc.admin.listItems.useQuery();
+  const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
+  const [spawnOpenItemId, setSpawnOpenItemId] = useState<string | null>(null);
+  const [spawnX, setSpawnX] = useState(0);
+  const [spawnY, setSpawnY] = useState(0);
 
-  const spawnItem = trpc.admin.spawnItem.useMutation({
+  // ── Create Item form state ──
+  const [createName, setCreateName]         = useState("");
+  const [createTier, setCreateTier]         = useState(1);
+  const [createStatsStr, setCreateStatsStr] = useState("{}");
+  const [createPixelStr, setCreatePixelStr] = useState("");
+  const [createItemType, setCreateItemType] = useState<"STANDARD" | "CONTAINER">("STANDARD");
+  const [createError, setCreateError]       = useState<string | null>(null);
+
+  const createItemMut = trpc.admin.createItem.useMutation({
     onSuccess: () => {
       utils.admin.getWorldStats.invalidate();
-      utils.admin.listItems.invalidate();
+      void refetchItems();
+      setCreateName(""); setCreateStatsStr("{}"); setCreatePixelStr("");
+    },
+    onError: (e) => setCreateError(e.message),
+  });
+
+  const spawnItemMut = trpc.admin.spawnItem.useMutation({
+    onSuccess: () => {
+      void refetchItems();
+      setSpawnOpenItemId(null);
     },
   });
 
+  function handleCreate() {
+    setCreateError(null);
+    let statsJson;
+    try { statsJson = JSON.parse(createStatsStr); }
+    catch { setCreateError("Stats JSON is not valid JSON."); return; }
+    const lines = createPixelStr.trim() ? createPixelStr.split("\n").map(s => s.trim() || null) : undefined;
+    if (lines && lines.length !== 256) {
+      setCreateError(`Pixel data must be exactly 256 lines (got ${lines.length}).`);
+      return;
+    }
+    createItemMut.mutate({ name: createName, rarityTier: createTier, statsJson, pixelData: lines ?? undefined, itemType: createItemType });
+  }
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       {/* Rarity tier breakdown */}
       <div>
         <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>Items by Rarity Tier</p>
@@ -484,27 +536,72 @@ function ItemsTab() {
         </div>
       </div>
 
-      {/* Spawn action */}
-      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-        <Button
-          size="sm"
-          disabled={spawnItem.isPending}
-          onClick={() =>
-            spawnItem.mutate({
-              name: "The Sacred Lily Pad",
-              rarityTier: 12,
-              stats: { attackBonus: 50, defenseBonus: 40, hpBonus: 200, actionType: "ACTION_RIBBIT_OF_DOOM" },
-              ownerType: "world_drop",
-              ownerId: null,
-              gridX: 0,
-              gridY: 0,
-            })
-          }
-        >
-          Spawn Test Item (T12)
-        </Button>
-        {spawnItem.isSuccess && <span style={{ fontSize: 12, color: "#fde68a" }}>Item spawned!</span>}
-        {spawnItem.isError && <span style={{ fontSize: 12, color: "#f87171" }}>{spawnItem.error?.message}</span>}
+      {/* Create Item form */}
+      <div style={{ background: "#0a1120", border: "1px solid #1e2a3a", borderRadius: 8, padding: "14px 16px" }}>
+        <p style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 }}>
+          Create Item
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+          <div>
+            <p style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>Name</p>
+            <input
+              value={createName}
+              onChange={(e) => setCreateName(e.target.value)}
+              placeholder="Item name…"
+              style={{ width: "100%", background: "#060d18", border: "1px solid #1e2a3a", borderRadius: 4, padding: "6px 8px", color: "#e2e8f0", fontSize: 12, boxSizing: "border-box" }}
+            />
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <p style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>Rarity Tier (1–12)</p>
+              <input
+                type="number" min={1} max={12}
+                value={createTier}
+                onChange={(e) => setCreateTier(Number(e.target.value))}
+                style={{ width: "100%", background: "#060d18", border: "1px solid #1e2a3a", borderRadius: 4, padding: "6px 8px", color: TIER_COLORS[createTier] ?? "#e2e8f0", fontSize: 12, boxSizing: "border-box" }}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <p style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>Type</p>
+              <select
+                value={createItemType}
+                onChange={(e) => setCreateItemType(e.target.value as "STANDARD" | "CONTAINER")}
+                style={{ width: "100%", background: "#060d18", border: "1px solid #1e2a3a", borderRadius: 4, padding: "6px 8px", color: "#e2e8f0", fontSize: 12, boxSizing: "border-box" }}
+              >
+                <option value="STANDARD">STANDARD</option>
+                <option value="CONTAINER">CONTAINER</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+          <div>
+            <p style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>Stats JSON</p>
+            <textarea
+              value={createStatsStr}
+              onChange={(e) => setCreateStatsStr(e.target.value)}
+              rows={4}
+              style={{ width: "100%", background: "#060d18", border: "1px solid #1e2a3a", borderRadius: 4, padding: "6px 8px", color: "#e2e8f0", fontSize: 11, fontFamily: "monospace", resize: "vertical", boxSizing: "border-box" }}
+            />
+          </div>
+          <div>
+            <p style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>Pixel Data (256 hex values, one per line — optional)</p>
+            <textarea
+              value={createPixelStr}
+              onChange={(e) => setCreatePixelStr(e.target.value)}
+              rows={4}
+              placeholder={"#ff0000\n#00ff00\n…"}
+              style={{ width: "100%", background: "#060d18", border: "1px solid #1e2a3a", borderRadius: 4, padding: "6px 8px", color: "#9ca3af", fontSize: 10, fontFamily: "monospace", resize: "vertical", boxSizing: "border-box" }}
+            />
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Button size="sm" disabled={createItemMut.isPending || !createName.trim()} onClick={handleCreate}>
+            {createItemMut.isPending ? "Queueing…" : "Create Item"}
+          </Button>
+          {createItemMut.isSuccess && <span style={{ fontSize: 12, color: "#4ade80" }}>Queued — resolves next tick</span>}
+          {createError && <span style={{ fontSize: 12, color: "#f87171" }}>{createError}</span>}
+        </div>
       </div>
 
       {/* Items table */}
@@ -512,46 +609,110 @@ function ItemsTab() {
         <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>
           Latest {itemsList?.length ?? 0} Items
         </p>
-        <ScrollArea style={{ height: 400 }}>
+        <ScrollArea style={{ height: 440 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ borderBottom: "1px solid #1e2a3a", color: "#9ca3af", textAlign: "left" }}>
                 <th style={{ padding: "6px 8px" }}>UUID</th>
                 <th style={{ padding: "6px 8px" }}>Name</th>
                 <th style={{ padding: "6px 8px" }}>Tier</th>
-                <th style={{ padding: "6px 8px" }}>Owner Type</th>
+                <th style={{ padding: "6px 8px" }}>State</th>
                 <th style={{ padding: "6px 8px" }}>Owner ID</th>
                 <th style={{ padding: "6px 8px" }}>Location</th>
                 <th style={{ padding: "6px 8px" }}>Created</th>
+                <th style={{ padding: "6px 8px" }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {itemsList?.map((item) => (
-                <tr key={item.itemId} style={{ borderBottom: "1px solid #0f1929" }}>
-                  <td style={{ padding: "6px 8px", color: "#6b7280", fontFamily: "monospace" }}>
-                    {item.itemId.slice(0, 8)}…
-                  </td>
-                  <td style={{ padding: "6px 8px", color: TIER_COLORS[item.rarityTier] ?? "#e2e8f0", fontWeight: 600 }}>
-                    {item.name}
-                  </td>
-                  <td style={{ padding: "6px 8px" }}>
-                    <span style={{ color: TIER_COLORS[item.rarityTier], fontSize: 11 }}>
-                      T{item.rarityTier} {TIER_LABELS[item.rarityTier]}
-                    </span>
-                  </td>
-                  <td style={{ padding: "6px 8px", color: "#9ca3af" }}>{item.ownerType}</td>
-                  <td style={{ padding: "6px 8px", color: "#6b7280" }}>{item.ownerId ?? "—"}</td>
-                  <td style={{ padding: "6px 8px", color: "#6b7280", fontFamily: "monospace", fontSize: 11 }}>
-                    {item.gridX != null ? `(${item.gridX},${item.gridY})` : "—"}
-                  </td>
-                  <td style={{ padding: "6px 8px", color: "#4b5563", fontSize: 11 }}>
-                    {new Date(item.createdAt).toLocaleString()}
-                  </td>
-                </tr>
+                <Fragment key={item.itemId}>
+                  <tr style={{ borderBottom: "1px solid #0f1929" }}>
+                    <td
+                      style={{ padding: "6px 8px", color: "#6b7280", fontFamily: "monospace", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+                      onClick={() => setExpandedItemId((prev) => prev === item.itemId ? null : item.itemId)}
+                    >
+                      {item.itemId.slice(0, 8)}… <span style={{ fontSize: 9, opacity: 0.6 }}>{expandedItemId === item.itemId ? "▾" : "▸"}</span>
+                    </td>
+                    <td style={{ padding: "6px 8px", color: TIER_COLORS[item.rarityTier] ?? "#e2e8f0", fontWeight: 600 }}>
+                      {item.name}
+                    </td>
+                    <td style={{ padding: "6px 8px" }}>
+                      <span style={{ color: TIER_COLORS[item.rarityTier], fontSize: 11 }}>
+                        T{item.rarityTier} {TIER_LABELS[item.rarityTier]}
+                      </span>
+                    </td>
+                    <td style={{ padding: "6px 8px", color: "#9ca3af" }}>{item.itemState}</td>
+                    <td style={{ padding: "6px 8px", color: "#6b7280" }}>{item.ownerId ?? "—"}</td>
+                    <td style={{ padding: "6px 8px", color: "#6b7280", fontFamily: "monospace", fontSize: 11 }}>
+                      {item.gridX != null ? `(${item.gridX},${item.gridY})` : "—"}
+                    </td>
+                    <td style={{ padding: "6px 8px", color: "#4b5563", fontSize: 11 }}>
+                      {new Date(item.createdAt).toLocaleString()}
+                    </td>
+                    <td style={{ padding: "6px 8px" }}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        style={{ fontSize: 10, height: 22, padding: "0 8px", borderColor: "#f472b6", color: "#f472b6" }}
+                        onClick={() => {
+                          setSpawnX(0); setSpawnY(0);
+                          setSpawnOpenItemId((prev) => prev === item.itemId ? null : item.itemId);
+                        }}
+                      >
+                        {spawnOpenItemId === item.itemId ? "Close" : "Spawn"}
+                      </Button>
+                    </td>
+                  </tr>
+                  {expandedItemId === item.itemId && (
+                    <tr style={{ background: "#080f1c" }}>
+                      <td colSpan={8} style={{ padding: "4px 12px 8px 20px" }}>
+                        <span style={{ fontSize: 11, color: "#6b7280" }}>UUID: </span>
+                        <span style={{ fontFamily: "monospace", fontSize: 12, color: "#e2e8f0" }}>{item.itemId}</span>
+                      </td>
+                    </tr>
+                  )}
+                  {spawnOpenItemId === item.itemId && (
+                    <tr style={{ background: "#080f1c" }}>
+                      <td colSpan={8} style={{ padding: "8px 12px 10px 20px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <p style={{ fontSize: 11, color: "#f472b6", margin: 0, whiteSpace: "nowrap" }}>Spawn at:</p>
+                          <input
+                            type="number"
+                            placeholder="X"
+                            value={spawnX}
+                            onChange={(e) => setSpawnX(Number(e.target.value))}
+                            style={{ width: 70, background: "#060d18", border: "1px solid #1e2a3a", borderRadius: 4, padding: "4px 6px", color: "#e2e8f0", fontSize: 12 }}
+                          />
+                          <input
+                            type="number"
+                            placeholder="Y"
+                            value={spawnY}
+                            onChange={(e) => setSpawnY(Number(e.target.value))}
+                            style={{ width: 70, background: "#060d18", border: "1px solid #1e2a3a", borderRadius: 4, padding: "4px 6px", color: "#e2e8f0", fontSize: 12 }}
+                          />
+                          <Button
+                            size="sm"
+                            disabled={spawnItemMut.isPending}
+                            style={{ fontSize: 11, background: "#831843", borderColor: "#f472b6", color: "#fce7f3" }}
+                            onClick={() => spawnItemMut.mutate({ itemId: item.itemId, targetX: spawnX, targetY: spawnY })}
+                          >
+                            {spawnItemMut.isPending ? "Queueing…" : "Spawn Item"}
+                          </Button>
+                          {spawnItemMut.isSuccess && spawnOpenItemId === null && (
+                            <span style={{ fontSize: 11, color: "#4ade80" }}>Queued!</span>
+                          )}
+                          {spawnItemMut.isError && (
+                            <span style={{ fontSize: 11, color: "#f87171" }}>{spawnItemMut.error?.message}</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
               {(!itemsList || itemsList.length === 0) && (
                 <tr>
-                  <td colSpan={7} style={{ padding: "20px 8px", textAlign: "center", color: "#4b5563", fontStyle: "italic" }}>
+                  <td colSpan={8} style={{ padding: "20px 8px", textAlign: "center", color: "#4b5563", fontStyle: "italic" }}>
                     No items yet.
                   </td>
                 </tr>
@@ -744,6 +905,11 @@ function VisionTab() {
     setLockedIn(false);
   });
 
+  const { actionLogs } = useActionLogs(
+    selectedFrog?.gridX ?? null,
+    selectedFrog?.gridY ?? null,
+  );
+
   const lookData = useMemo(() => {
     if (!selectedTile || !vision) return null;
     const { gridX, gridY } = selectedTile;
@@ -804,6 +970,9 @@ function VisionTab() {
               centerChunkY={centerChunkY}
               chunks={vision?.chunks ?? {}}
               entities={entities}
+              groundItems={(vision?.items ?? [])
+                .filter(i => i.gridX != null && i.gridY != null)
+                .map(i => ({ gridX: i.gridX!, gridY: i.gridY!, itemId: i.itemId }))}
               selectedTile={selectedTile ?? undefined}
               onTileClick={(gx, gy) => setSelectedTile({ gridX: gx, gridY: gy })}
             />
@@ -884,6 +1053,7 @@ function VisionTab() {
         selectedTile={selectedTile}
         playerFrog={selectedFrog}
         lockedIn={lockedIn}
+        equippedActions={[]}
         onMove={(actionType) => {
           if (!selectedFrogId || !selectedTile) return;
           submitMove.mutate({
@@ -893,6 +1063,7 @@ function VisionTab() {
             targetGridY: selectedTile.gridY,
           });
         }}
+        onAction={() => {}}
         error={submitMove.error?.message}
         tileDef={selectedTile ? getTileDef(
           vision?.chunks[`${Math.floor(selectedTile.gridX / 16)}:${Math.floor(selectedTile.gridY / 16)}`]
@@ -900,6 +1071,8 @@ function VisionTab() {
             ?.[((selectedTile.gridX % 16) + 16) % 16] ?? ""
         ) : null}
       />
+
+      <ActionLog logs={actionLogs} />
 
     </div>
   );
@@ -1293,6 +1466,7 @@ export default function Admin() {
               <TabsTrigger value="world">World</TabsTrigger>
               <TabsTrigger value="vision">Vision</TabsTrigger>
               <TabsTrigger value="items">Items</TabsTrigger>
+              <TabsTrigger value="inventory">Inventory</TabsTrigger>
               <TabsTrigger value="log">World Log</TabsTrigger>
               <TabsTrigger value="engine">Engine</TabsTrigger>
             </TabsList>
@@ -1314,6 +1488,7 @@ export default function Admin() {
             <TabsContent value="world"><WorldTab /></TabsContent>
             <TabsContent value="vision"><VisionTab /></TabsContent>
             <TabsContent value="items"><ItemsTab /></TabsContent>
+            <TabsContent value="inventory"><InventoryTab /></TabsContent>
             <TabsContent value="log"><WorldLogTab /></TabsContent>
             <TabsContent value="engine"><EngineTab /></TabsContent>
           </div>

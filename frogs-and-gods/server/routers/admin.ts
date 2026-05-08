@@ -3,12 +3,14 @@ import { z } from "zod";
 import { publicProcedure, router } from "../_core/trpc";
 import {
   createFrog,
-  createItem,
+  createPendingAction,
   createUserWithOpenId,
   createWorldMapChunk,
   getChunksByCoords,
+  getEquippedItemsByFrogId,
   getFrogById,
   getGodById,
+  getInventoryItemsByFrogId,
   getItemStats,
   getWorldChunkStats,
   listAllFrogs,
@@ -24,10 +26,11 @@ import type { FrogStats } from "../../drizzle/schema";
 import { xpToNextLevel } from "../engine/xpDistributor";
 import {
   CreateFrogSchema,
+  CreateItemPayloadSchema,
   GetChunksByCoordsSchema,
   MoveTypeSchema,
   SpawnChunkSchema,
-  SpawnItemSchema,
+  SpawnItemPayloadSchema,
   type FrogSpecies,
 } from "../../shared/game.schema";
 import { validateAndQueueMovement } from "../engine/movement";
@@ -79,13 +82,18 @@ export const adminRouter = router({
       const mods = SPECIES_MODIFIERS[input.species];
       const base = input.distributedStats;
       const finalStats: FrogStats = {
-        maxHp:   Math.max(1, base.maxHp   + (mods.maxHp   ?? 0)),
-        maxMana: Math.max(1, base.maxMana  + (mods.maxMana ?? 0)),
-        str:     Math.max(1, base.str      + (mods.str     ?? 0)),
-        dex:     Math.max(1, base.dex      + (mods.dex     ?? 0)),
-        wis:     Math.max(1, base.wis      + (mods.wis     ?? 0)),
-        int:     Math.max(1, base.int      + (mods.int     ?? 0)),
-        cha:     Math.max(1, base.cha      + (mods.cha     ?? 0)),
+        maxHp:               Math.max(1, base.maxHp   + (mods.maxHp   ?? 0)),
+        maxMana:             Math.max(1, base.maxMana  + (mods.maxMana ?? 0)),
+        str:                 Math.max(1, base.str      + (mods.str     ?? 0)),
+        dex:                 Math.max(1, base.dex      + (mods.dex     ?? 0)),
+        wis:                 Math.max(1, base.wis      + (mods.wis     ?? 0)),
+        int:                 Math.max(1, base.int      + (mods.int     ?? 0)),
+        cha:                 Math.max(1, base.cha      + (mods.cha     ?? 0)),
+        inventoryCapacity:   6,
+        equipCapacity:       3,
+        equippedAttackBonus: 0,
+        equippedDefenseBonus: 0,
+        equippedHpBonus:     0,
       };
 
       await createFrog({
@@ -201,26 +209,63 @@ export const adminRouter = router({
       return result;
     }),
 
-  spawnItem: publicProcedure
-    .input(SpawnItemSchema)
+  createItem: publicProcedure
+    .input(CreateItemPayloadSchema)
     .mutation(async ({ input }) => {
-      const itemId = crypto.randomUUID();
-      const item = await createItem({
-        itemId,
-        name:       input.name,
-        rarityTier: input.rarityTier,
-        statsJson:  input.stats,
-        ownerType:  input.ownerType,
-        ownerId:    input.ownerId ?? undefined,
-        gridX:      input.gridX ?? undefined,
-        gridY:      input.gridY ?? undefined,
+      const action = await createPendingAction({
+        actorId:       0,
+        actionType:    "CREATE_ITEM",
+        resolveBucket: Math.floor(Date.now() / 500),
+        payload:       input,
       });
-      return { success: true, item };
+      return { queued: true, pendingActionId: action.id };
+    }),
+
+  spawnItem: publicProcedure
+    .input(SpawnItemPayloadSchema)
+    .mutation(async ({ input }) => {
+      const action = await createPendingAction({
+        actorId:       0,
+        actionType:    "SPAWN_ITEM",
+        resolveBucket: Math.floor(Date.now() / 500),
+        payload:       { itemId: input.itemId, targetX: input.targetX, targetY: input.targetY },
+      });
+      return { queued: true, pendingActionId: action.id };
     }),
 
   listItems: publicProcedure.query(async () => {
     return listRecentItems(50);
   }),
+
+  // ── INVENTORY (DEV) ───────────────────────
+
+  getInventoryForFrog: publicProcedure
+    .input(z.object({ frogId: z.number().int().positive() }))
+    .query(async ({ input }) => {
+      return getInventoryItemsByFrogId(input.frogId);
+    }),
+
+  getEquippedForFrog: publicProcedure
+    .input(z.object({ frogId: z.number().int().positive() }))
+    .query(async ({ input }) => {
+      return getEquippedItemsByFrogId(input.frogId);
+    }),
+
+  submitActionForFrog: publicProcedure
+    .input(z.object({
+      frogId:     z.number().int().positive(),
+      actionType: z.string().min(1).max(64),
+      payload:    z.record(z.string(), z.unknown()).optional(),
+    }))
+    .mutation(async ({ input }) => {
+      const action = await createPendingAction({
+        actorId:       input.frogId,
+        actionType:    input.actionType,
+        resolveBucket: Math.floor(Date.now() / 500),
+        payload:       input.payload ?? {},
+      });
+      return { queued: true, pendingActionId: action.id };
+    }),
 
   // ── MOVEMENT (DEV) ────────────────────────
 

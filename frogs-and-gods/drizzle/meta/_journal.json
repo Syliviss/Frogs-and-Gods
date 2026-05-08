@@ -1,47 +1,19 @@
 {
   "version": "7",
-  "dialect": "mysql",
+  "dialect": "postgresql",
   "entries": [
     {
       "idx": 0,
-      "version": "5",
-      "when": 1777090413607,
-      "tag": "0000_cloudy_stark_industries",
+      "version": "7",
+      "when": 1777946769307,
+      "tag": "0000_massive_the_anarchist",
       "breakpoints": true
     },
     {
       "idx": 1,
-      "version": "5",
-      "when": 1777090575827,
-      "tag": "0001_solid_mordo",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "5",
-      "when": 1777489683359,
-      "tag": "0002_nostalgic_blur",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "5",
-      "when": 1746000000000,
-      "tag": "0003_world_map_overrides",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "5",
-      "when": 1777856160593,
-      "tag": "0004_lovely_iron_patriot",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "5",
-      "when": 1777856558464,
-      "tag": "0005_solid_shaman",
+      "version": "7",
+      "when": 1746662400000,
+      "tag": "0001_add_pixel_data",
       "breakpoints": true
     }
   ]

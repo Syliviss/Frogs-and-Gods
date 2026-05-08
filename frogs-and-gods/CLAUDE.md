@@ -45,7 +45,7 @@ There is **no real authentication**. `protectedProcedure` and `adminProcedure` a
 
 ### Database
 
-MySQL via Drizzle ORM. Schema in `drizzle/schema.ts`. All CRUD lives in `server/db.ts`.
+PostgreSQL via Drizzle ORM (postgres-js driver). Schema in `drizzle/schema.ts`. All CRUD lives in `server/db.ts`.
 
 Key tables: `users`, `frogs`, `gods`, `parties`, `party_invites`, `items`, `pending_actions`, `world_log_events`, `world_map_chunks`, `world_map_overrides`, `predators`.
 

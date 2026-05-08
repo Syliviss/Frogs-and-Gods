@@ -191,25 +191,93 @@ export const ItemStatsSchema = z.object({
   attackBonus:    z.number().int().optional(),
   defenseBonus:   z.number().int().optional(),
   hpBonus:        z.number().int().optional(),
-  /** Unique action this item grants (e.g. "ACTION_DEVOUR") */
-  actionType:     z.string().optional(),
+  /** Actions this item grants when EQUIPPED */
+  grantedActions: z.array(z.string()).optional(),
+  /** Actions this item blocks (triggers Fumble) while in frog's inventory */
+  blockedActions: z.array(z.string()).optional(),
   visionModifier: z.number().int().optional(),
 });
 export type ItemStats = z.infer<typeof ItemStatsSchema>;
 
-export const OwnerTypeSchema = z.enum(["frog", "god", "world_drop", "void"]);
+export const ItemStateSchema = z.enum(["VOID", "GROUND", "INVENTORY", "EQUIPPED", "ITEM", "GOD"]);
+export type ItemState = z.infer<typeof ItemStateSchema>;
+
+export const ItemTypeSchema = z.enum(["STANDARD", "CONTAINER"]);
+export type ItemType = z.infer<typeof ItemTypeSchema>;
 
 export const SpawnItemSchema = z.object({
   name:       z.string().min(1).max(128),
   rarityTier: z.number().int().min(1).max(12),
   stats:      ItemStatsSchema,
-  ownerType:  OwnerTypeSchema.default("world_drop"),
+  itemState:  ItemStateSchema.default("GROUND"),
+  itemType:   ItemTypeSchema.default("STANDARD"),
   ownerId:    z.number().int().positive().nullable().default(null),
-  /** Tile position — populated when ownerType = "world_drop" */
+  /** Tile position — populated when itemState = "GROUND" */
   gridX:      z.number().int().optional(),
   gridY:      z.number().int().optional(),
 });
 export type SpawnItemInput = z.infer<typeof SpawnItemSchema>;
+
+// ─────────────────────────────────────────────
+// GOD / ADMIN ACTION PAYLOAD SCHEMAS
+// ─────────────────────────────────────────────
+
+export const CreateItemPayloadSchema = z.object({
+  name:        z.string().min(1).max(128),
+  description: z.string().max(512).optional(),
+  statsJson:   ItemStatsSchema,
+  pixelData:   z.array(z.string().nullable()).length(256).optional(),
+  itemType:    ItemTypeSchema.default("STANDARD"),
+  rarityTier:  z.number().int().min(1).max(12).default(1),
+});
+export type CreateItemPayload = z.infer<typeof CreateItemPayloadSchema>;
+
+export const SpawnItemPayloadSchema = z.object({
+  itemId:  z.string().uuid(),
+  targetX: z.number().int(),
+  targetY: z.number().int(),
+});
+export type SpawnItemPayload = z.infer<typeof SpawnItemPayloadSchema>;
+
+// ─────────────────────────────────────────────
+// ITEM PIXEL DATA (sprite cache lazy-fetch)
+// ─────────────────────────────────────────────
+
+export const PixelDataSchema = z.array(z.string().nullable()).length(256);
+export type PixelData = z.infer<typeof PixelDataSchema>;
+
+export const ItemPixelDataSchema = z.object({
+  itemId:    z.string(),
+  pixelData: PixelDataSchema.nullable(),
+});
+export type ItemPixelData = z.infer<typeof ItemPixelDataSchema>;
+
+// ─────────────────────────────────────────────
+// ITEM ACTION SCHEMAS
+// ─────────────────────────────────────────────
+
+export const EquipActionSchema = z.object({
+  itemId: z.string().min(1).max(36),
+});
+export type EquipActionInput = z.infer<typeof EquipActionSchema>;
+
+export const ThrowActionSchema = z.object({
+  itemId:      z.string().min(1).max(36),
+  targetGridX: z.number().int(),
+  targetGridY: z.number().int(),
+});
+export type ThrowActionInput = z.infer<typeof ThrowActionSchema>;
+
+export const StoreActionSchema = z.object({
+  itemId:      z.string().min(1).max(36),
+  containerId: z.string().min(1).max(36),
+});
+export type StoreActionInput = z.infer<typeof StoreActionSchema>;
+
+export const GiveActionSchema = z.object({
+  itemId: z.string().min(1).max(36),
+});
+export type GiveActionInput = z.infer<typeof GiveActionSchema>;
 
 // ─────────────────────────────────────────────
 // PENDING ACTION (heartbeat queue input)
@@ -235,6 +303,20 @@ export type SubmitActionInput = z.infer<typeof SubmitActionSchema>;
 
 export const MoveTypeSchema = z.enum(["STEP", "HOP", "DASH"]);
 export type MoveActionType = z.infer<typeof MoveTypeSchema>;
+
+// ─────────────────────────────────────────────
+// ACTION LOG (ephemeral sub-tick events)
+// ─────────────────────────────────────────────
+
+export type ActionLogCategory = "movement" | "combat" | "god";
+
+export interface ActionLogEntry {
+  text:     string;
+  x:        number;
+  y:        number;
+  chunk_id: string;
+  category: ActionLogCategory;
+}
 
 export const MoveActionSchema = z.object({
   actionType:  MoveTypeSchema,

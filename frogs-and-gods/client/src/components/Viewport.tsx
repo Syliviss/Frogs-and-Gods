@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { TILE_REGISTRY } from "../../../shared/tileRegistry";
 import type { TileChar } from "../../../shared/game.schema";
+import { spriteManager } from "../lib/SpriteManager";
 
 const CHUNK_SIZE = 16;
 const TILE_W = 24;
@@ -15,11 +16,12 @@ interface ViewportProps {
   centerChunkY: number;
   chunks: Record<string, string[][]>;
   entities?: { gridX: number; gridY: number; type?: "frog" | "predator" }[];
+  groundItems?: { gridX: number; gridY: number; itemId: string }[];
   selectedTile?: { gridX: number; gridY: number };
   onTileClick?: (gridX: number, gridY: number) => void;
 }
 
-export function Viewport({ centerChunkX, centerChunkY, chunks, entities, selectedTile, onTileClick }: ViewportProps) {
+export function Viewport({ centerChunkX, centerChunkY, chunks, entities, groundItems, selectedTile, onTileClick }: ViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Inverse isometric: screen → grid
@@ -51,6 +53,12 @@ export function Viewport({ centerChunkX, centerChunkY, chunks, entities, selecte
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
+    // Pixel-art quality: disable interpolation so 16×16→24×24 stays blocky
+    (ctx as any).imageSmoothingEnabled       = false;
+    (ctx as any).msImageSmoothingEnabled     = false;
+    (ctx as any).webkitImageSmoothingEnabled = false;
+    (ctx as any).mozImageSmoothingEnabled    = false;
+
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         const key = `${centerChunkX + dx}:${centerChunkY + dy}`;
@@ -71,6 +79,25 @@ export function Viewport({ centerChunkX, centerChunkY, chunks, entities, selecte
       }
     }
 
+    // Pass 3: ground items — drawn before entities so frogs appear on top
+    if (groundItems) {
+      for (const item of groundItems) {
+        const worldX = item.gridX - centerChunkX * CHUNK_SIZE;
+        const worldY = item.gridY - centerChunkY * CHUNK_SIZE;
+        const screenX = Math.floor((worldX - worldY) * (TILE_W / 2)) + OFFSET_X;
+        const screenY = Math.floor((worldX + worldY) * (TILE_H / 2)) + OFFSET_Y;
+        const spriteCanvas = spriteManager.get(item.itemId);
+        if (spriteCanvas) {
+          ctx.drawImage(spriteCanvas, screenX - 12, screenY - 12, 24, 24);
+        } else {
+          // Fallback: pink square for items without baked sprite data
+          ctx.fillStyle = "#f472b6";
+          ctx.fillRect(screenX - 4, screenY - 4, 9, 9);
+        }
+      }
+    }
+
+    // Pass 4: entities (frogs & predators) — stand above the earth and its treasures
     if (entities) {
       for (const entity of entities) {
         const worldX = entity.gridX - centerChunkX * CHUNK_SIZE;
@@ -91,7 +118,7 @@ export function Viewport({ centerChunkX, centerChunkY, chunks, entities, selecte
       ctx.lineWidth = 1;
       ctx.strokeRect(screenX - 9, screenY - 7, 18, 14);
     }
-  }, [centerChunkX, centerChunkY, chunks, entities, selectedTile]);
+  }, [centerChunkX, centerChunkY, chunks, entities, groundItems, selectedTile]);
 
   return (
     <canvas

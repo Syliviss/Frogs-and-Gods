@@ -1,5 +1,7 @@
-import { and, count, desc, eq, gte, isNotNull, lte, or, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { and, count, desc, eq, gte, inArray, isNotNull, lte, not, or, sql } from "drizzle-orm";
+import { GOD_ACTION_TYPES } from "./actions/_god_action_types";
+import postgres from "postgres";
+import { drizzle } from "drizzle-orm/postgres-js";
 import {
   DEFAULT_FROG_STATS,
   frogs,
@@ -42,7 +44,8 @@ let _db: ReturnType<typeof drizzle> | null = null;
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      const client = postgres(process.env.DATABASE_URL);
+      _db = drizzle(client);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -81,7 +84,10 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   if (!values.lastSignedIn) values.lastSignedIn = new Date();
   if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
 
-  await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
+  await db.insert(users).values(values).onConflictDoUpdate({
+    target: users.openId,
+    set: updateSet,
+  });
 }
 
 export async function getUserByOpenId(openId: string) {
@@ -189,14 +195,8 @@ export async function updateGod(
 export async function createParty(data: InsertParty): Promise<Party> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  await db.insert(parties).values(data);
-  const result = await db
-    .select()
-    .from(parties)
-    .where(eq(parties.leaderId, data.leaderId))
-    .orderBy(desc(parties.createdAt))
-    .limit(1);
-  return result[0]!;
+  const [party] = await db.insert(parties).values(data).returning();
+  return party!;
 }
 
 export async function getPartyById(id: number): Promise<Party | undefined> {
@@ -237,8 +237,10 @@ export async function acceptPartyInvite(inviteId: number, frogId: number): Promi
 
   if (!invite[0] || invite[0].status !== "pending") return null;
 
-  await db.update(partyInvites).set({ status: "accepted" }).where(eq(partyInvites.id, inviteId));
-  await db.update(frogs).set({ partyId: invite[0].partyId }).where(eq(frogs.id, frogId));
+  await db.transaction(async (tx) => {
+    await tx.update(partyInvites).set({ status: "accepted" }).where(eq(partyInvites.id, inviteId));
+    await tx.update(frogs).set({ partyId: invite[0].partyId }).where(eq(frogs.id, frogId));
+  });
 
   const party = await getPartyById(invite[0].partyId);
   return party ?? null;
@@ -295,9 +297,11 @@ export async function listAllGods() {
 export async function createUserWithOpenId(openId: string, name: string): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  await db.insert(users).values({ openId, name, role: "frog", lastSignedIn: new Date() });
-  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
-  return result[0]!.id;
+  const [{ id }] = await db
+    .insert(users)
+    .values({ openId, name, role: "frog", lastSignedIn: new Date() })
+    .returning({ id: users.id });
+  return id;
 }
 
 // ─────────────────────────────────────────────
@@ -307,18 +311,15 @@ export async function createUserWithOpenId(openId: string, name: string): Promis
 export async function createWorldMapChunk(data: InsertWorldMapChunk): Promise<WorldMapChunk> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  await db.insert(worldMapChunks).values(data).onDuplicateKeyUpdate({
-    set: { terrainDataJson: data.terrainDataJson, biome: data.biome, updatedAt: new Date() },
-  });
-  const result = await db
-    .select()
-    .from(worldMapChunks)
-    .where(and(
-      eq(worldMapChunks.chunkX, data.chunkX!),
-      eq(worldMapChunks.chunkY, data.chunkY!)
-    ))
-    .limit(1);
-  return result[0]!;
+  const [chunk] = await db
+    .insert(worldMapChunks)
+    .values(data)
+    .onConflictDoUpdate({
+      target: [worldMapChunks.chunkX, worldMapChunks.chunkY],
+      set: { terrainDataJson: data.terrainDataJson, biome: data.biome, updatedAt: new Date() },
+    })
+    .returning();
+  return chunk!;
 }
 
 export async function getWorldChunkStats(): Promise<{ totalChunks: number; activeChunks: number }> {
@@ -370,14 +371,8 @@ export async function getChunksInBoundingBox(
 export async function createWorldMapOverride(data: InsertWorldMapOverride): Promise<WorldMapOverride> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  await db.insert(worldMapOverrides).values(data);
-  const result = await db
-    .select()
-    .from(worldMapOverrides)
-    .where(and(eq(worldMapOverrides.gridX, data.gridX), eq(worldMapOverrides.gridY, data.gridY)))
-    .orderBy(desc(worldMapOverrides.createdAt))
-    .limit(1);
-  return result[0]!;
+  const [override] = await db.insert(worldMapOverrides).values(data).returning();
+  return override!;
 }
 
 export async function getOverridesByChunk(chunkX: number, chunkY: number): Promise<WorldMapOverride[]> {
@@ -396,9 +391,8 @@ export async function getOverridesByChunk(chunkX: number, chunkY: number): Promi
 export async function createItem(data: InsertItem): Promise<Item> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  await db.insert(items).values(data);
-  const result = await db.select().from(items).where(eq(items.itemId, data.itemId)).limit(1);
-  return result[0]!;
+  const [item] = await db.insert(items).values(data).returning();
+  return item!;
 }
 
 export async function listRecentItems(limit = 50): Promise<Item[]> {
@@ -436,6 +430,84 @@ export async function getItemsInBounds(
   ));
 }
 
+export async function getItemById(itemId: string): Promise<Item | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [item] = await db.select().from(items).where(eq(items.itemId, itemId));
+  return item ?? null;
+}
+
+export async function getItemPixelDataByIds(ids: string[]) {
+  if (ids.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({ itemId: items.itemId, pixelData: items.pixelData })
+    .from(items)
+    .where(inArray(items.itemId, ids));
+}
+
+export async function getEquippedItemsByFrogId(frogId: number): Promise<Item[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(items).where(
+    and(eq(items.itemState, "EQUIPPED"), eq(items.ownerId, frogId))
+  );
+}
+
+export async function getInventoryItemsByFrogId(frogId: number): Promise<Item[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(items).where(
+    and(eq(items.itemState, "INVENTORY"), eq(items.ownerId, frogId))
+  );
+}
+
+export async function getCountOfEquippedItems(frogId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [row] = await db.select({ cnt: count() }).from(items).where(
+    and(eq(items.itemState, "EQUIPPED"), eq(items.ownerId, frogId))
+  );
+  return row?.cnt ?? 0;
+}
+
+export async function getCountOfInventoryItems(frogId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [row] = await db.select({ cnt: count() }).from(items).where(
+    and(
+      or(eq(items.itemState, "INVENTORY"), eq(items.itemState, "EQUIPPED")),
+      eq(items.ownerId, frogId)
+    )
+  );
+  return row?.cnt ?? 0;
+}
+
+export async function updateItem(itemId: string, data: Partial<Omit<Item, "itemId" | "createdAt">>): Promise<Item> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const [updated] = await db.update(items).set(data).where(eq(items.itemId, itemId)).returning();
+  return updated!;
+}
+
+export async function hasFrogActedThisHeartbeat(frogId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const currentHeartbeat = Math.floor(Date.now() / 10000);
+  const bucketMin = currentHeartbeat * 20;
+  const bucketMax = (currentHeartbeat + 1) * 20;
+  const [row] = await db.select({ cnt: count() }).from(pendingActions).where(
+    and(
+      eq(pendingActions.actorId, frogId),
+      eq(pendingActions.status, "resolved"),
+      gte(pendingActions.resolveBucket, bucketMin),
+      lte(pendingActions.resolveBucket, bucketMax - 1),
+    )
+  );
+  return (row?.cnt ?? 0) > 0;
+}
+
 // ─────────────────────────────────────────────
 // PENDING ACTIONS
 // ─────────────────────────────────────────────
@@ -443,9 +515,8 @@ export async function getItemsInBounds(
 export async function createPendingAction(data: InsertPendingAction): Promise<PendingAction> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  const [{ id }] = await db.insert(pendingActions).values(data).$returningId();
-  const result = await db.select().from(pendingActions).where(eq(pendingActions.id, id)).limit(1);
-  return result[0]!;
+  const [row] = await db.insert(pendingActions).values(data).returning();
+  return row!;
 }
 
 export async function getPendingActionsToResolve(currentBucket: number): Promise<PendingAction[]> {
@@ -454,17 +525,33 @@ export async function getPendingActionsToResolve(currentBucket: number): Promise
   return db
     .select()
     .from(pendingActions)
-    .where(and(eq(pendingActions.status, "pending"), lte(pendingActions.resolveBucket, currentBucket)));
+    .where(and(
+      eq(pendingActions.status, "pending"),
+      lte(pendingActions.resolveBucket, currentBucket),
+      not(inArray(pendingActions.actionType, [...GOD_ACTION_TYPES])),
+    ));
+}
+
+export async function getPendingGodActions(currentBucket: number): Promise<PendingAction[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(pendingActions)
+    .where(and(
+      eq(pendingActions.status, "pending"),
+      lte(pendingActions.resolveBucket, currentBucket),
+      inArray(pendingActions.actionType, [...GOD_ACTION_TYPES]),
+    ));
 }
 
 export async function purgeResolvedActions(): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
   const result = await db.execute(
-    sql`DELETE FROM pending_actions WHERE status = 'resolved' AND resolved_at < NOW() - INTERVAL 20 SECOND`
+    sql`DELETE FROM pending_actions WHERE status = 'resolved' AND resolved_at < NOW() - INTERVAL '20 seconds'`
   );
-  const header = result[0] as { affectedRows?: number };
-  const deletedCount = header.affectedRows ?? 0;
+  const deletedCount = (result as unknown as { count: number }).count ?? 0;
   if (deletedCount > 0) {
     console.log(`[Cleanup] Purged ${deletedCount} resolved actions from the pond.`);
   }
@@ -478,13 +565,8 @@ export async function purgeResolvedActions(): Promise<number> {
 export async function createPredator(data: InsertPredator): Promise<Predator> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  await db.insert(predators).values(data);
-  const result = await db
-    .select()
-    .from(predators)
-    .orderBy(desc(predators.createdAt))
-    .limit(1);
-  return result[0]!;
+  const [predator] = await db.insert(predators).values(data).returning();
+  return predator!;
 }
 
 export async function getPredatorsByChunk(chunkX: number, chunkY: number): Promise<Predator[]> {

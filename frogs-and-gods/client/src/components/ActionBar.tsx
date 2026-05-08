@@ -2,15 +2,26 @@ import { chebyshevDistance } from "../../../shared/movement";
 import type { TileDef } from "../../../shared/tileRegistry";
 
 interface ActionBarProps {
-  selectedTile: { gridX: number; gridY: number } | null;
-  playerFrog:   { gridX: number; gridY: number } | null;
-  lockedIn:     boolean;
-  onMove:       (actionType: "STEP" | "HOP") => void;
-  error?:       string | null;
-  tileDef?:     TileDef | null;
+  selectedTile:    { gridX: number; gridY: number } | null;
+  playerFrog:      { gridX: number; gridY: number } | null;
+  lockedIn:        boolean;
+  equippedActions: string[];
+  onMove:          (actionType: "STEP" | "HOP") => void;
+  onAction:        (actionType: string) => void;
+  error?:          string | null;
+  tileDef?:        TileDef | null;
 }
 
-export function ActionBar({ selectedTile, playerFrog, lockedIn, onMove, error, tileDef }: ActionBarProps) {
+export function ActionBar({
+  selectedTile,
+  playerFrog,
+  lockedIn,
+  equippedActions,
+  onMove,
+  onAction,
+  error,
+  tileDef,
+}: ActionBarProps) {
   const dist = playerFrog && selectedTile
     ? chebyshevDistance(playerFrog.gridX, playerFrog.gridY, selectedTile.gridX, selectedTile.gridY)
     : null;
@@ -36,6 +47,7 @@ export function ActionBar({ selectedTile, playerFrog, lockedIn, onMove, error, t
         <p className="text-sm text-gray-600 font-serif">Click a tile to select a destination.</p>
       )}
 
+      {/* Universal actions — always visible */}
       <div className="flex gap-3">
         <button
           onClick={() => onMove("STEP")}
@@ -49,7 +61,28 @@ export function ActionBar({ selectedTile, playerFrog, lockedIn, onMove, error, t
         >
           HOP <span className="text-gray-500 text-xs font-normal">(≤3)</span>
         </button>
+        <button
+          onClick={() => onAction("THROW")}
+          className="px-5 py-2 border border-blue-800 rounded text-sm font-bold font-serif hover:bg-blue-900/40 transition"
+        >
+          THROW <span className="text-gray-500 text-xs font-normal">(≤3)</span>
+        </button>
       </div>
+
+      {/* Item-granted actions — refreshed on each ENGINE_TICK */}
+      {equippedActions.length > 0 && (
+        <div className="flex gap-2 flex-wrap justify-center mt-1">
+          {equippedActions.map((action) => (
+            <button
+              key={action}
+              onClick={() => onAction(action)}
+              className="px-4 py-1.5 border border-purple-700 rounded text-xs font-bold font-serif hover:bg-purple-900/40 transition"
+            >
+              {action}
+            </button>
+          ))}
+        </div>
+      )}
 
       {error && <p className="text-red-400 text-xs">{error}</p>}
     </div>

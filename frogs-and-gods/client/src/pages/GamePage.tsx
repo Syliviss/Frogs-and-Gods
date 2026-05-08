@@ -1,9 +1,12 @@
 import { useState, useEffect } from "react";
 import { Viewport } from "@/components/Viewport";
 import { ActionBar } from "@/components/ActionBar";
+import { ActionLog } from "@/components/ActionLog";
 import { trpc } from "@/lib/trpc";
 import { useTickSync } from "@/hooks/useTickSync";
+import { useActionLogs } from "@/hooks/useActionLogs";
 import { getTileDef } from "../../../shared/tileRegistry";
+import { spriteManager } from "@/lib/SpriteManager";
 
 const CHUNK_SIZE = 16;
 
@@ -30,9 +33,36 @@ export default function GamePage() {
     if (vf) setFrogPos({ gridX: vf.gridX, gridY: vf.gridY });
   }, [vision, selectedFrogId, frogPos]);
 
+  const equippedActionsQuery = trpc.frog.getEquippedActions.useQuery(
+    { frogId: selectedFrogId! },
+    { enabled: !!selectedFrogId },
+  );
+
+  const inventoryQuery = trpc.admin.getInventoryForFrog.useQuery(
+    { frogId: selectedFrogId! },
+    { enabled: !!selectedFrogId },
+  );
+
   const submitMovement = trpc.admin.submitMovementForFrog.useMutation({
     onSuccess: () => setLockedIn(true),
   });
+
+  // Lazy sprite fetch: only request pixel data for item IDs not yet in the cache
+  const newItemIds = (vision?.items ?? [])
+    .map(i => i.itemId)
+    .filter(id => !spriteManager.has(id));
+
+  const pixelDataQuery = trpc.frog.getItemPixelData.useQuery(
+    { itemIds: newItemIds },
+    { enabled: newItemIds.length > 0 },
+  );
+
+  useEffect(() => {
+    if (!pixelDataQuery.data) return;
+    for (const { itemId, pixelData } of pixelDataQuery.data) {
+      if (pixelData) spriteManager.bake(itemId, pixelData);
+    }
+  }, [pixelDataQuery.data]);
 
   useTickSync(() => {
     // Pull position directly from the refetch response so centering updates
@@ -41,10 +71,22 @@ export default function GamePage() {
       if (!result.data || !selectedFrogId) return;
       const vf = result.data.frogs.find(f => f.id === selectedFrogId);
       if (vf) setFrogPos({ gridX: vf.gridX, gridY: vf.gridY });
+      // Prune canvases for items no longer in view, but keep held inventory items cached.
+      // inventoryQuery provides held item IDs so their sprites survive the prune.
+      const groundIds = (result.data.items ?? []).map(i => i.itemId);
+      const heldIds   = (inventoryQuery.data ?? []).map(i => i.itemId);
+      spriteManager.prune(new Set([...groundIds, ...heldIds]));
     });
     void frogsQuery.refetch();
+    void equippedActionsQuery.refetch();
+    void inventoryQuery.refetch();
     setLockedIn(false);
   });
+
+  const { actionLogs } = useActionLogs(
+    frogPos?.gridX ?? playerFrog?.gridX ?? null,
+    frogPos?.gridY ?? playerFrog?.gridY ?? null,
+  );
 
   const effectivePos = frogPos ?? playerFrog;
   const centerChunkX = effectivePos ? Math.floor(effectivePos.gridX / CHUNK_SIZE) : 0;
@@ -54,6 +96,10 @@ export default function GamePage() {
     ...(vision?.frogs ?? []).map(f => ({ gridX: f.gridX, gridY: f.gridY, type: "frog" as const })),
     ...(vision?.predators ?? []).map(p => ({ gridX: p.gridX, gridY: p.gridY, type: "predator" as const })),
   ];
+
+  const groundItems = (vision?.items ?? [])
+    .filter(i => i.itemState === "GROUND" && i.gridX != null && i.gridY != null)
+    .map(i => ({ gridX: i.gridX!, gridY: i.gridY!, itemId: i.itemId }));
 
   const targetChar = selectedTile
     ? vision?.chunks[`${Math.floor(selectedTile.gridX / CHUNK_SIZE)}:${Math.floor(selectedTile.gridY / CHUNK_SIZE)}`]
@@ -70,6 +116,13 @@ export default function GamePage() {
       targetGridX: selectedTile.gridX,
       targetGridY: selectedTile.gridY,
     });
+  };
+
+  const handleAction = (_actionType: string) => {
+    // Item-granted and universal non-movement actions (THROW, etc.)
+    // Will be wired to item selection UI in a future iteration.
+    // For now: placeholder — locked-in state will still apply via WS queue.
+    setLockedIn(true);
   };
 
   if (!selectedFrogId) {
@@ -112,15 +165,20 @@ export default function GamePage() {
         centerChunkY={centerChunkY}
         chunks={vision?.chunks ?? {}}
         entities={entities}
+        groundItems={groundItems}
         selectedTile={selectedTile ?? undefined}
         onTileClick={(gridX, gridY) => setSelectedTile({ gridX, gridY })}
       />
+
+      <ActionLog logs={actionLogs} />
 
       <ActionBar
         selectedTile={selectedTile}
         playerFrog={frogPos ?? playerFrog}
         lockedIn={lockedIn}
+        equippedActions={equippedActionsQuery.data ?? []}
         onMove={handleMove}
+        onAction={handleAction}
         error={submitMovement.error?.message}
         tileDef={tileDef}
       />

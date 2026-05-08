@@ -3,9 +3,10 @@ import { WebSocketServer, WebSocket } from "ws";
 import { getWorldLogEmitter } from "./worldLogEmitter";
 import type { WorldLogPayload } from "../../shared/game.schema";
 import { heartbeat } from "../engine/heartbeat";
-import { processMovementActions } from "../engine/tickProcessor";
+import { processAllActions } from "../engine/tickProcessor";
 import { validateAndQueueMovement } from "../engine/movement";
-import { purgeResolvedActions } from "../db";
+import { getFrogByOwnerId, createPendingAction, purgeResolvedActions } from "../db";
+import { flushActionLogs } from "../engine/actionLog";
 
 // ─────────────────────────────────────────────
 // CONNECTED CLIENTS REGISTRY
@@ -70,7 +71,10 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
 
   // ── 500ms engine loop: process pending DB actions ──
   heartbeat.on("subtick", () => {
-    void processMovementActions(emitToUser);
+    void processAllActions(emitToUser).then(() => {
+      const logs = flushActionLogs();
+      if (logs.length > 0) broadcast({ type: "SUBTICK_LOGS", logs });
+    });
     broadcast({ type: "ENGINE_QUIVER", timestamp: Date.now() });
   });
 
@@ -102,24 +106,49 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
             break;
           }
 
-          // ── Frog movement — writes directly to DB queue ──
+          // ── All frog actions — routes movement through legacy validator,
+          //    item actions directly to the pending_actions queue ──
           case "SUBMIT_ACTION": {
             if (client.role !== "frog" || !client.userId) {
               ws.send(JSON.stringify({ type: "ERROR", message: "Must be a frog player to submit actions." }));
               break;
             }
-            void validateAndQueueMovement(
-              client.userId,
-              msg.actionType,
-              msg.targetGridX,
-              msg.targetGridY,
-            ).then((result) => {
-              ws.send(JSON.stringify(
-                result.ok
-                  ? { type: "ACTION_QUEUED", pendingActionId: result.pendingActionId }
-                  : { type: "ERROR", message: result.message }
-              ));
-            });
+
+            const MOVE_TYPES = new Set(["STEP", "HOP", "DASH"]);
+
+            if (MOVE_TYPES.has(msg.actionType)) {
+              // Movement: use existing validator (tile lookup + cost check at queue time)
+              void validateAndQueueMovement(
+                client.userId,
+                msg.actionType,
+                msg.targetGridX,
+                msg.targetGridY,
+              ).then((result) => {
+                ws.send(JSON.stringify(
+                  result.ok
+                    ? { type: "ACTION_QUEUED", pendingActionId: result.pendingActionId }
+                    : { type: "ERROR", message: result.message }
+                ));
+              });
+            } else {
+              // Item / other actions: verify frog ownership then queue with payload
+              void getFrogByOwnerId(client.userId).then(async (frog) => {
+                if (!frog) return ws.send(JSON.stringify({ type: "ERROR", message: "No active Frog found." }));
+                if (frog.isDead) return ws.send(JSON.stringify({ type: "ERROR", message: "Dead Frogs cannot act." }));
+
+                const pending = await createPendingAction({
+                  actorId:       frog.id,
+                  actionType:    msg.actionType,
+                  targetGridX:   msg.targetGridX ?? null,
+                  targetGridY:   msg.targetGridY ?? null,
+                  resolveBucket: Math.floor(Date.now() / 500),
+                  payload:       msg.payload ?? {},
+                });
+                ws.send(JSON.stringify({ type: "ACTION_QUEUED", pendingActionId: pending.id }));
+              }).catch(() => {
+                ws.send(JSON.stringify({ type: "ERROR", message: "Failed to queue action." }));
+              });
+            }
             break;
           }
 

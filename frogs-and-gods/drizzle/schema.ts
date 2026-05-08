@@ -2,28 +2,41 @@ import {
   bigint,
   boolean,
   index,
-  int,
-  json,
-  mysqlEnum,
-  mysqlTable,
+  integer,
+  jsonb,
+  pgEnum,
+  pgTable,
+  serial,
   text,
   timestamp,
   uniqueIndex,
   varchar,
-} from "drizzle-orm/mysql-core";
+} from "drizzle-orm/pg-core";
+
+// ─────────────────────────────────────────────
+// ENUMS  (must be declared at file scope in pg-core)
+// ─────────────────────────────────────────────
+
+export const roleEnum         = pgEnum("role",           ["frog", "god", "admin"]);
+export const inviteStatusEnum = pgEnum("invite_status",  ["pending", "accepted", "declined"]);
+export const itemStateEnum    = pgEnum("item_state",     ["VOID", "GROUND", "INVENTORY", "EQUIPPED", "ITEM", "GOD"]);
+export const itemTypeEnum     = pgEnum("item_type",      ["STANDARD", "CONTAINER"]);
+export const actionStatusEnum = pgEnum("action_status",  ["pending", "resolved", "cancelled"]);
+export const enemyTypeEnum    = pgEnum("enemy_type",     ["SNAKE", "FLY"]);
+export const aiTypeEnum       = pgEnum("ai_type",        ["HUNTER", "REACTIVE", "DOCILE"]);
 
 // ─────────────────────────────────────────────
 // USERS
 // ─────────────────────────────────────────────
 
-export const users = mysqlTable("users", {
-  id:           int("id").autoincrement().primaryKey(),
+export const users = pgTable("users", {
+  id:           serial("id").primaryKey(),
   openId:       varchar("openId", { length: 64 }).notNull().unique(),
   name:         text("name"),
   /** "frog" = mortal grinder, "god" = divine watcher, "admin" = console access */
-  role:         mysqlEnum("role", ["frog", "god", "admin"]).default("frog").notNull(),
+  role:         roleEnum("role").default("frog").notNull(),
   createdAt:    timestamp("createdAt").defaultNow().notNull(),
-  updatedAt:    timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt:    timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 
@@ -35,46 +48,56 @@ export type InsertUser = typeof users.$inferInsert;
 // ─────────────────────────────────────────────
 
 export interface FrogStats {
-  maxHp:   number;
-  maxMana: number;
-  str:     number;
-  dex:     number;
-  wis:     number;
-  int:     number;
-  cha:     number;
+  maxHp:               number;
+  maxMana:             number;
+  str:                 number;
+  dex:                 number;
+  wis:                 number;
+  int:                 number;
+  cha:                 number;
+  inventoryCapacity:   number;
+  equipCapacity:       number;
+  equippedAttackBonus: number;
+  equippedDefenseBonus: number;
+  equippedHpBonus:     number;
 }
 
 export const DEFAULT_FROG_STATS: FrogStats = {
-  maxHp:   100,
-  maxMana: 50,
-  str:     10,
-  dex:     10,
-  wis:     10,
-  int:     10,
-  cha:     10,
+  maxHp:               100,
+  maxMana:             50,
+  str:                 10,
+  dex:                 10,
+  wis:                 10,
+  int:                 10,
+  cha:                 10,
+  inventoryCapacity:   6,
+  equipCapacity:       3,
+  equippedAttackBonus: 0,
+  equippedDefenseBonus: 0,
+  equippedHpBonus:     0,
 };
 
-export const frogs = mysqlTable("frogs", {
-  id:               int("id").autoincrement().primaryKey(),
-  ownerId:          int("ownerId").notNull(),
+export const frogs = pgTable("frogs", {
+  id:               serial("id").primaryKey(),
+  ownerId:          integer("ownerId").notNull(),
   name:             varchar("name", { length: 64 }).notNull(),
-  level:            int("level").default(1).notNull(),
-  currentXp:        int("current_xp").default(0).notNull(),
-  xpToNextLevel:    int("xp_to_next_level").default(100).notNull(),
-  currentHp:        int("current_hp").default(100).notNull(),
-  currentMana:      int("current_mana").default(50).notNull(),
+  level:            integer("level").default(1).notNull(),
+  currentXp:        integer("current_xp").default(0).notNull(),
+  xpToNextLevel:    integer("xp_to_next_level").default(100).notNull(),
+  currentHp:        integer("current_hp").default(100).notNull(),
+  currentMana:      integer("current_mana").default(50).notNull(),
   /** e.g. "healthy" | "poisoned" | "stunned" | "cursed" | "blessed" */
   currentCondition: varchar("current_condition", { length: 64 }).default("healthy").notNull(),
   /** Absolute tile X position in the world grid */
-  gridX:            int("grid_x").default(0).notNull(),
+  gridX:            integer("grid_x").default(0).notNull(),
   /** Absolute tile Y position in the world grid */
-  gridY:            int("grid_y").default(0).notNull(),
+  gridY:            integer("grid_y").default(0).notNull(),
   isDead:           boolean("is_dead").default(false).notNull(),
-  partyId:          int("partyId"),
+  partyId:          integer("partyId"),
   /** Flexible stats: maxHp, maxMana, str, dex, wis, int, cha */
-  statsJson:        json("stats_json").$type<FrogStats>().notNull(),
+  statsJson:        jsonb("stats_json").$type<FrogStats>().notNull(),
   createdAt:        timestamp("createdAt").defaultNow().notNull(),
-  updatedAt:        timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt:        timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 });
 
 export type Frog       = typeof frogs.$inferSelect;
@@ -84,15 +107,15 @@ export type InsertFrog = typeof frogs.$inferInsert;
 // GODS  (divine watcher players)
 // ─────────────────────────────────────────────
 
-export const gods = mysqlTable("gods", {
-  id:                 int("id").autoincrement().primaryKey(),
-  userId:             int("userId").notNull().unique(),
+export const gods = pgTable("gods", {
+  id:                 serial("id").primaryKey(),
+  userId:             integer("userId").notNull().unique(),
   name:               varchar("name", { length: 64 }).notNull(),
   /** Currency spent on interventions */
-  divinePower:        int("divine_power").default(100).notNull(),
-  totalInterventions: int("total_interventions").default(0).notNull(),
+  divinePower:        integer("divine_power").default(100).notNull(),
+  totalInterventions: integer("total_interventions").default(0).notNull(),
   createdAt:          timestamp("createdAt").defaultNow().notNull(),
-  updatedAt:          timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt:          timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 });
 
 export type God       = typeof gods.$inferSelect;
@@ -102,14 +125,14 @@ export type InsertGod = typeof gods.$inferInsert;
 // PARTIES  (social groupings of Frogs)
 // ─────────────────────────────────────────────
 
-export const parties = mysqlTable("parties", {
-  id:        int("id").autoincrement().primaryKey(),
+export const parties = pgTable("parties", {
+  id:        serial("id").primaryKey(),
   name:      varchar("name", { length: 64 }).notNull(),
-  leaderId:  int("leaderId").notNull(),
-  maxSize:   int("max_size").default(4).notNull(),
+  leaderId:  integer("leaderId").notNull(),
+  maxSize:   integer("max_size").default(4).notNull(),
   isActive:  boolean("is_active").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 });
 
 export type Party       = typeof parties.$inferSelect;
@@ -119,12 +142,12 @@ export type InsertParty = typeof parties.$inferInsert;
 // PARTY INVITES
 // ─────────────────────────────────────────────
 
-export const partyInvites = mysqlTable("party_invites", {
-  id:              int("id").autoincrement().primaryKey(),
-  partyId:         int("partyId").notNull(),
-  invitedFrogId:   int("invitedFrogId").notNull(),
-  invitedByFrogId: int("invitedByFrogId").notNull(),
-  status:          mysqlEnum("status", ["pending", "accepted", "declined"]).default("pending").notNull(),
+export const partyInvites = pgTable("party_invites", {
+  id:              serial("id").primaryKey(),
+  partyId:         integer("partyId").notNull(),
+  invitedFrogId:   integer("invitedFrogId").notNull(),
+  invitedByFrogId: integer("invitedByFrogId").notNull(),
+  status:          inviteStatusEnum("status").default("pending").notNull(),
   createdAt:       timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -139,28 +162,39 @@ export interface ItemStats {
   attackBonus?:    number;
   defenseBonus?:   number;
   hpBonus?:        number;
-  /** Unique action this item can trigger (e.g. "ACTION_DEVOUR") */
-  actionType?:     string;
+  /** Actions this item grants when EQUIPPED (e.g. ["TONGUE_STRIKE", "DEVOUR"]) */
+  grantedActions?: string[];
+  /** Actions this item blocks in the frog's inventory (triggers Fumble) */
+  blockedActions?: string[];
   visionModifier?: number;
   [key: string]:   unknown;
 }
 
-export const items = mysqlTable("items", {
-  itemId:          varchar("item_id", { length: 36 }).primaryKey(),
-  name:            varchar("name", { length: 128 }).notNull(),
-  rarityTier:      int("rarity_tier").default(1).notNull(),
+export const items = pgTable("items", {
+  itemId:            varchar("item_id", { length: 36 }).primaryKey(),
+  name:              varchar("name", { length: 128 }).notNull(),
+  rarityTier:        integer("rarity_tier").default(1).notNull(),
   /** Flexible stats + unique action definitions */
-  statsJson:       json("stats_json").$type<ItemStats>().notNull(),
-  ownerType:       mysqlEnum("owner_type", ["frog", "god", "world_drop", "void"]).default("world_drop").notNull(),
-  ownerId:         int("owner_id"),
-  /** Absolute tile X — set when ownerType = "world_drop" */
-  gridX:           int("grid_x"),
-  /** Absolute tile Y — set when ownerType = "world_drop" */
-  gridY:           int("grid_y"),
+  statsJson:         jsonb("stats_json").$type<ItemStats>().notNull(),
+  /** Where this item currently exists in the world */
+  itemState:         itemStateEnum("item_state").default("GROUND").notNull(),
+  /** STANDARD = plain item; CONTAINER = can hold other items (not other containers) */
+  itemType:          itemTypeEnum("item_type").default("STANDARD").notNull(),
+  ownerId:           integer("owner_id"),
+  /** Absolute tile X — set when itemState = "GROUND" */
+  gridX:             integer("grid_x"),
+  /** Absolute tile Y — set when itemState = "GROUND" */
+  gridY:             integer("grid_y"),
+  /** UUIDs of items stored inside this container (only relevant when itemType = "CONTAINER") */
+  inventory:         jsonb("inventory").$type<string[]>().default([]).notNull(),
+  /** UUID of the container item this item lives inside (set when itemState = "ITEM") */
+  parentContainerId: varchar("parent_container_id", { length: 36 }),
   /** Chrono-Relic cooldown: decremented by 1 each heartbeat tick */
-  remainingTicks:  int("remaining_ticks").default(0).notNull(),
-  createdAt:       timestamp("createdAt").defaultNow().notNull(),
-  updatedAt:       timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  remainingTicks:    integer("remaining_ticks").default(0).notNull(),
+  /** 16×16 pixel art sprite — 256-element array of hex colors or null (transparent) */
+  pixelData:         jsonb("pixel_data").$type<(string | null)[]>(),
+  createdAt:         timestamp("createdAt").defaultNow().notNull(),
+  updatedAt:         timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 });
 
 export type Item       = typeof items.$inferSelect;
@@ -170,21 +204,21 @@ export type InsertItem = typeof items.$inferInsert;
 // PENDING ACTIONS  (heartbeat queue)
 // ─────────────────────────────────────────────
 
-export const pendingActions = mysqlTable("pending_actions", {
-  id:           int("id").autoincrement().primaryKey(),
+export const pendingActions = pgTable("pending_actions", {
+  id:           serial("id").primaryKey(),
   /** Frog that submitted this action */
-  actorId:      int("actor_id").notNull(),
+  actorId:      integer("actor_id").notNull(),
   /** e.g. "HOP", "STRIKE", "USE_ITEM" */
   actionType:   varchar("action_type", { length: 64 }).notNull(),
   /** Target tile X (null for non-spatial actions) */
-  targetGridX:  int("target_grid_x"),
+  targetGridX:  integer("target_grid_x"),
   /** Target tile Y */
-  targetGridY:  int("target_grid_y"),
+  targetGridY:  integer("target_grid_y"),
   /** Absolute 500ms bucket at submission time: Math.floor(Date.now() / 500) */
   resolveBucket: bigint("resolve_bucket", { mode: "number" }).notNull(),
   /** Optional extra payload (item id, target frog id, etc.) */
-  payload:      json("payload"),
-  status:       mysqlEnum("status", ["pending", "resolved", "cancelled"]).default("pending").notNull(),
+  payload:      jsonb("payload"),
+  status:       actionStatusEnum("status").default("pending").notNull(),
   /** Set when status transitions to resolved/cancelled; used for TTL purge */
   resolvedAt:   timestamp("resolved_at"),
   createdAt:    timestamp("createdAt").defaultNow().notNull(),
@@ -200,18 +234,18 @@ export type InsertPendingAction = typeof pendingActions.$inferInsert;
 // WORLD MAP CHUNKS  (lazy-loaded 16×16 tile chunks)
 // ─────────────────────────────────────────────
 
-export const worldMapChunks = mysqlTable("world_map_chunks", {
-  id:              int("id").autoincrement().primaryKey(),
-  chunkX:          int("chunk_x").notNull(),
-  chunkY:          int("chunk_y").notNull(),
-  chunkSize:       int("chunk_size").default(16).notNull(),
+export const worldMapChunks = pgTable("world_map_chunks", {
+  id:              serial("id").primaryKey(),
+  chunkX:          integer("chunk_x").notNull(),
+  chunkY:          integer("chunk_y").notNull(),
+  chunkSize:       integer("chunk_size").default(16).notNull(),
   biome:           varchar("biome", { length: 32 }).default("grassland").notNull(),
   terrainDataJson: text("terrain_data_json"),
   isActive:        boolean("is_active").default(false).notNull(),
-  entityCount:     int("entity_count").default(0).notNull(),
+  entityCount:     integer("entity_count").default(0).notNull(),
   lastLoadedAt:    timestamp("last_loaded_at"),
   createdAt:       timestamp("createdAt").defaultNow().notNull(),
-  updatedAt:       timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt:       timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 }, (table) => [
   uniqueIndex("unique_chunk_pos").on(table.chunkX, table.chunkY),
 ]);
@@ -223,17 +257,17 @@ export type InsertWorldMapChunk = typeof worldMapChunks.$inferInsert;
 // WORLD MAP OVERRIDES  (God-placed terrain changes)
 // ─────────────────────────────────────────────
 
-export const worldMapOverrides = mysqlTable("world_map_overrides", {
-  id:           int("id").autoincrement().primaryKey(),
-  chunkX:       int("chunk_x").notNull(),
-  chunkY:       int("chunk_y").notNull(),
+export const worldMapOverrides = pgTable("world_map_overrides", {
+  id:           serial("id").primaryKey(),
+  chunkX:       integer("chunk_x").notNull(),
+  chunkY:       integer("chunk_y").notNull(),
   /** Absolute tile X */
-  gridX:        int("grid_x").notNull(),
+  gridX:        integer("grid_x").notNull(),
   /** Absolute tile Y */
-  gridY:        int("grid_y").notNull(),
+  gridY:        integer("grid_y").notNull(),
   /** Replacement ASCII tile character (e.g. "#", "~") */
   newChar:      varchar("new_char", { length: 4 }).notNull(),
-  authorGodId:  int("author_god_id"),
+  authorGodId:  integer("author_god_id"),
   createdAt:    timestamp("createdAt").defaultNow().notNull(),
 }, (table) => [
   index("chunk_override_idx").on(table.chunkX, table.chunkY),
@@ -254,22 +288,22 @@ export interface PredatorStats {
   [key: string]: unknown;
 }
 
-export const predators = mysqlTable("predators", {
-  id:           int("id").autoincrement().primaryKey(),
-  enemyType:    mysqlEnum("enemy_type", ["SNAKE", "FLY"]).notNull(),
-  aiType:       mysqlEnum("ai_type", ["HUNTER", "REACTIVE", "DOCILE"]).notNull(),
-  gridX:        int("grid_x").notNull(),
-  gridY:        int("grid_y").notNull(),
+export const predators = pgTable("predators", {
+  id:           serial("id").primaryKey(),
+  enemyType:    enemyTypeEnum("enemy_type").notNull(),
+  aiType:       aiTypeEnum("ai_type").notNull(),
+  gridX:        integer("grid_x").notNull(),
+  gridY:        integer("grid_y").notNull(),
   /** Stored directly for fast spatial queries (derived: Math.floor(gridX / 16)) */
-  chunkX:       int("chunk_x").notNull(),
-  chunkY:       int("chunk_y").notNull(),
-  currentHp:    int("current_hp").notNull(),
+  chunkX:       integer("chunk_x").notNull(),
+  chunkY:       integer("chunk_y").notNull(),
+  currentHp:    integer("current_hp").notNull(),
   /** Dedicated column — enables fast WHERE currentTick - lastMealTick > 180 queries */
-  lastMealTick: int("last_meal_tick").default(0).notNull(),
+  lastMealTick: integer("last_meal_tick").default(0).notNull(),
   /** Flexible AI state, mutations, path data */
-  statsJson:    json("stats_json").$type<PredatorStats>(),
+  statsJson:    jsonb("stats_json").$type<PredatorStats>(),
   createdAt:    timestamp("createdAt").defaultNow().notNull(),
-  updatedAt:    timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt:    timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 }, (table) => [
   index("chunk_predator_idx").on(table.chunkX, table.chunkY),
 ]);
@@ -281,17 +315,17 @@ export type InsertPredator = typeof predators.$inferInsert;
 // WORLD LOG EVENTS  (broadcast to Gods)
 // ─────────────────────────────────────────────
 
-export const worldLogEvents = mysqlTable("world_log_events", {
-  id:        int("id").autoincrement().primaryKey(),
-  tickId:    int("tick_id"),
-  frogId:    int("frog_id"),
-  godId:     int("god_id"),
+export const worldLogEvents = pgTable("world_log_events", {
+  id:        serial("id").primaryKey(),
+  tickId:    integer("tick_id"),
+  frogId:    integer("frog_id"),
+  godId:     integer("god_id"),
   eventType: varchar("event_type", { length: 64 }).notNull(),
   /** Full event payload as JSON string */
   payload:   text("payload").notNull(),
   /** Chunk coordinates for God viewport filtering */
-  chunkX:    int("chunk_x"),
-  chunkY:    int("chunk_y"),
+  chunkX:    integer("chunk_x"),
+  chunkY:    integer("chunk_y"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 

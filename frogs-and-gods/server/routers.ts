@@ -20,12 +20,14 @@ import {
   createParty,
   createPartyInvite,
   getChunksByCoords,
+  getEquippedItemsByFrogId,
   getFrogById,
   getFrogByOwnerId,
   getFrogsByPartyId,
   getFrogsInBounds,
   getGodByUserId,
   getItemsInBounds,
+  getItemPixelDataByIds,
   getPendingInvitesForFrog,
   getPredatorsInChunkArea,
   getRecentWorldLog,
@@ -78,13 +80,18 @@ export const appRouter = router({
         const mods = SPECIES_MODIFIERS[input.species];
         const base = input.distributedStats;
         const finalStats: FrogStats = {
-          maxHp:   Math.max(1, base.maxHp   + (mods.maxHp   ?? 0)),
-          maxMana: Math.max(1, base.maxMana  + (mods.maxMana ?? 0)),
-          str:     Math.max(1, base.str      + (mods.str     ?? 0)),
-          dex:     Math.max(1, base.dex      + (mods.dex     ?? 0)),
-          wis:     Math.max(1, base.wis      + (mods.wis     ?? 0)),
-          int:     Math.max(1, base.int      + (mods.int     ?? 0)),
-          cha:     Math.max(1, base.cha      + (mods.cha     ?? 0)),
+          maxHp:               Math.max(1, base.maxHp   + (mods.maxHp   ?? 0)),
+          maxMana:             Math.max(1, base.maxMana  + (mods.maxMana ?? 0)),
+          str:                 Math.max(1, base.str      + (mods.str     ?? 0)),
+          dex:                 Math.max(1, base.dex      + (mods.dex     ?? 0)),
+          wis:                 Math.max(1, base.wis      + (mods.wis     ?? 0)),
+          int:                 Math.max(1, base.int      + (mods.int     ?? 0)),
+          cha:                 Math.max(1, base.cha      + (mods.cha     ?? 0)),
+          inventoryCapacity:   6,
+          equipCapacity:       3,
+          equippedAttackBonus: 0,
+          equippedDefenseBonus: 0,
+          equippedHpBonus:     0,
         };
 
         await createFrog({
@@ -149,7 +156,24 @@ export const appRouter = router({
             chunks[`${chunk.chunkX}:${chunk.chunkY}`] = JSON.parse(chunk.terrainDataJson) as string[][];
         }
 
-        return { chunks, frogs: frogRows, predators: predatorRows, items: itemRows };
+        // Strip pixelData from the tick payload — clients fetch it lazily via getItemPixelData
+        const groundItems = itemRows.map(({ pixelData: _px, ...rest }) => rest);
+
+        return { chunks, frogs: frogRows, predators: predatorRows, items: groundItems };
+      }),
+
+    getItemPixelData: publicProcedure
+      .input(z.object({ itemIds: z.array(z.string()).min(1).max(64) }))
+      .query(async ({ input }) => {
+        return getItemPixelDataByIds(input.itemIds);
+      }),
+
+    getEquippedActions: protectedProcedure
+      .input(z.object({ frogId: z.number().int().positive() }))
+      .query(async ({ input }) => {
+        const equipped = await getEquippedItemsByFrogId(input.frogId);
+        const actions = equipped.flatMap((item) => item.statsJson.grantedActions ?? []);
+        return actions;
       }),
   }),
 
