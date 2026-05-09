@@ -11,12 +11,19 @@ import { CHUNK_SIZE } from "../utils/worldGenerator";
 import type { TileChar } from "../../shared/game.schema";
 import { pushActionLog } from "../engine/actionLog";
 import { checkItemFumble } from "./_types";
+import { rollConditionCheck } from "./_conditionUtils";
 import type { ActionContext, ValidationResult, ExecuteResult, NotifyFn, ActionHandler } from "./_types";
 
 export function makeMoveHandler(actionType: MoveType): ActionHandler {
   return {
     async validate(ctx: ActionContext): Promise<ValidationResult> {
       const frog = ctx.frog!;
+
+      // Condition gate: handles WRAP (and any future status effects)
+      const condition = await rollConditionCheck(frog);
+      if (!condition.ok) {
+        return { ok: false, code: "FUMBLE", message: `${frog.name} is held and cannot move!` };
+      }
 
       // Item-based fumble check
       const equipped = await getEquippedItemsByFrogId(frog.id);

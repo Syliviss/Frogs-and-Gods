@@ -1,9 +1,17 @@
 import { eq } from "drizzle-orm";
-import { getDb, getFrogById, getPendingActionsToResolve, getPendingGodActions } from "../db";
+import {
+  getDb,
+  getFrogById,
+  getPredatorById,
+  getPendingActionsToResolve,
+  getPendingGodActions,
+  getPendingPredatorActions,
+} from "../db";
 import { pendingActions } from "../../drizzle/schema";
-import { runAction, GOD_ACTION_REGISTRY } from "../actions/index";
+import { runAction, GOD_ACTION_REGISTRY, PREDATOR_ACTION_REGISTRY } from "../actions/index";
 import type { NotifyFn } from "../actions/_types";
 import type { GodActionContext } from "../actions/god_types";
+import type { PredatorActionContext } from "../actions/_predator_types";
 
 async function processGodActions(bucket: number, notify: NotifyFn): Promise<void> {
   const db = await getDb();
@@ -31,6 +39,47 @@ async function processGodActions(bucket: number, notify: NotifyFn): Promise<void
   }
 }
 
+async function processPredatorActions(bucket: number, notify: NotifyFn): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const predatorPending = await getPendingPredatorActions(bucket);
+  for (const action of predatorPending) {
+    const handler = PREDATOR_ACTION_REGISTRY[action.actionType];
+    if (!handler) {
+      await db.update(pendingActions)
+        .set({ status: "cancelled", resolvedAt: new Date() })
+        .where(eq(pendingActions.id, action.id));
+      continue;
+    }
+    const predator = await getPredatorById(action.actorId);
+    if (!predator) {
+      await db.update(pendingActions)
+        .set({ status: "cancelled", resolvedAt: new Date() })
+        .where(eq(pendingActions.id, action.id));
+      continue;
+    }
+    const ctx: PredatorActionContext = {
+      actionType:  action.actionType,
+      actorId:     action.actorId,
+      targetGridX: action.targetGridX ?? 0,
+      targetGridY: action.targetGridY ?? 0,
+      payload:     (action.payload as Record<string, unknown>) ?? {},
+    };
+    const validation = await handler.validate(ctx, predator);
+    if (!validation.success) {
+      await db.update(pendingActions)
+        .set({ status: "cancelled", resolvedAt: new Date() })
+        .where(eq(pendingActions.id, action.id));
+      continue;
+    }
+    const result = await handler.execute(ctx, predator);
+    await handler.broadcast(ctx, predator, result, notify);
+    await db.update(pendingActions)
+      .set({ status: "resolved", resolvedAt: new Date() })
+      .where(eq(pendingActions.id, action.id));
+  }
+}
+
 export async function processAllActions(
   notify: NotifyFn = () => {},
 ): Promise<void> {
@@ -39,8 +88,10 @@ export async function processAllActions(
 
   const currentBucket = Math.floor(Date.now() / 500);
 
-  // God actions run before the frog DEX-sorted pass so items exist before frogs can act on them
+  // Pass 1: God actions — create items/entities so they exist before other passes
   await processGodActions(currentBucket, notify);
+  // Pass 2: Predator actions — SLITHER, STRIKE, WRAP resolve before the frog DEX pass
+  await processPredatorActions(currentBucket, notify);
 
   const pending = await getPendingActionsToResolve(currentBucket);
   if (pending.length === 0) return;

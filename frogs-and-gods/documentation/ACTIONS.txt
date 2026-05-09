@@ -8,6 +8,8 @@
 
 ## All Actions (Implemented)
 
+### Frog Actions (ActionHandler)
+
 | Action     | Type     | File                            | Description                                    |
 |------------|----------|---------------------------------|------------------------------------------------|
 | STEP       | movement | `server/actions/step.ts`        | Move 1 tile (Chebyshev distance 1)             |
@@ -15,6 +17,44 @@
 | EQUIP      | item     | `server/actions/equip.ts`       | Pick up/equip an item from ground or inventory |
 | THROW      | item     | `server/actions/throw.ts`       | Throw a held item to a ground tile (range 3)   |
 | STORE_ITEM | item     | `server/actions/store.ts`       | Place an item inside a CONTAINER item          |
+| SWING      | combat   | `server/actions/swing.ts`       | Multi-tile melee AoE via Generic Intent Builder |
+
+### Predator Actions (PredatorActionHandler)
+
+| Action  | Type     | File                           | Actor   | Description                                     |
+|---------|----------|--------------------------------|---------|-------------------------------------------------|
+| SLITHER | movement | `server/actions/slither.ts`    | Snake   | Move head 1 tile; shift 2 body segments behind  |
+| STRIKE  | combat   | `server/actions/strike.ts`     | Snake   | 7 flat damage; auto-chains into WRAP on hit     |
+| WRAP    | status   | `server/actions/wrap.ts`       | Snake   | Constrict target; frog must act to attempt escape |
+
+### God / Admin Actions (GodActionHandler)
+
+| Action         | Type  | File                                | Actor  | Description                                                        |
+|----------------|-------|-------------------------------------|--------|--------------------------------------------------------------------|
+| CREATE_ITEM    | admin | `server/actions/create_item.ts`     | God    | Create a new item record (VOID state)                             |
+| SPAWN_ITEM     | admin | `server/actions/spawn_item.ts`      | God    | Place an existing item at world coordinates                        |
+| SPAWN_PREDATOR | admin | `server/actions/spawn.ts`           | God    | Insert a new predator row; validates tile is not deep water (`≈`) |
+| KILL_PREDATOR  | admin | `server/actions/kill_predator.ts`   | God    | Hard-delete a predator by ID (divine removal, not combat death)   |
+
+#### SPAWN_PREDATOR Specification
+
+- **Registry**: `GOD_ACTION_REGISTRY` (actorId = 0 when queued via admin panel)
+- **Payload**: `{ gridX, gridY, enemyType, aiType, speed (1–10), hp (1–100) }`
+- **Validate**:
+  - Parses payload via `SpawnPredatorPayloadSchema`
+  - Fetches chunk at derived `chunkX/chunkY` — rejects if chunk not yet spawned
+  - Reads terrain JSON; rejects if target tile is `≈` (deep water)
+- **Execute**: Calls `createPredator()` with coiled initial segments (`[{x,y},{x,y}]` at spawn point)
+- **Broadcast**: Pushes action log entry in category `"god"`
+
+#### KILL_PREDATOR Specification
+
+- **Registry**: `GOD_ACTION_REGISTRY` (actorId = 0 when queued via admin panel)
+- **Payload**: `{ predatorId: number }`
+- **Validate**: Calls `getPredatorById` — rejects if predator not found
+- **Execute**: Calls `deletePredator(id)` — hard DELETE from `predators` table
+- **Broadcast**: Pushes action log entry in category `"god"`
+- **Note**: Does NOT clear `frog.statsJson.wrappedBy` on the wrapped frog. If a frog was being wrapped by this predator, its wrap status will linger until the next action clears it. Future work: cascade-clear on kill.
 
 ## Upcoming Actions (Not Yet Implemented)
 
@@ -24,6 +64,242 @@
 | SPIT   | item     | Drop a single item from inventory to ground at feet     |
 | ATTACK | combat   | Melee strike at an adjacent frog or predator            |
 | CAST   | magic    | Spend mana to trigger a spell from an EQUIPPED item     |
+
+---
+
+## SLITHER — Full Specification
+
+**File:** `server/actions/slither.ts`
+**Handler type:** `PredatorActionHandler`
+**Actor:** Snake (predator)
+
+### Body Mechanics
+
+The snake is always exactly 3 tiles long:
+- **Head** = `predators.gridX / gridY` (the authoritative position column)
+- **Body** = `statsJson.segments[0]` (first body tile) and `statsJson.segments[1]` (tail)
+
+On each SLITHER:
+1. `segments[1]` (old tail) is dropped.
+2. `segments[0]` (old first body) becomes new `segments[1]`.
+3. The old head position becomes new `segments[0]`.
+4. `gridX / gridY` updates to the target tile.
+5. `chunkX / chunkY` are re-derived as `Math.floor(gridX / 16)`.
+
+### Validation
+
+- Target must be exactly Chebyshev distance 1 from the current head position.
+- No terrain check (snake path planning is done at intent-calculation time by `snake.ts`).
+
+### Fumble / Cancel Rules
+
+A SLITHER is not a frog action — it has no fumble mechanism. If validation fails (bad distance), the action is marked **cancelled** in `pending_actions`.
+
+### Targeting Note
+
+SLITHER targets a **tile coordinate**, not an entity ID. If another entity steps onto the target tile before the action resolves, the snake slithers into that tile regardless.
+
+---
+
+## STRIKE — Full Specification
+
+**File:** `server/actions/strike.ts`
+**Handler type:** `PredatorActionHandler`
+**Actor:** Snake (predator)
+
+### Damage
+
+`7` flat HP (no stat scaling). Applied to whichever frog is on the target tile at resolution time.
+
+### Validation (at submission)
+
+1. Chebyshev distance to target ≤ 1 (adjacent or same tile).
+2. Target tile char ≠ `≈` — snakes cannot strike targets standing in deep water. **Action is cancelled** (no damage, no WRAP).
+3. Snake is not already wrapping a target (`statsJson.wrapping === null`).
+
+### Double Validation (at resolution)
+
+Both checks re-run at execution time:
+- **Deep water re-check:** if the tile is `≈` at resolution → cancel.
+- **Miss check:** `getFrogsAtTile(targetX, targetY)` — if no frog is present → silent miss (action cancelled). The frog may have moved to a different tile during the snake's cast delay. **This is intentional** — initiative speed matters. A fast snake cannot be dodged; a slow snake can.
+
+### Auto-Chain: STRIKE → WRAP
+
+If the struck frog survives (newHp > 0):
+1. A `WRAP` pending_action is inserted at `resolveBucket = currentBucket + 1` (next sub-tick).
+2. `predator.statsJson.wrapping = { targetFrogId }` is set immediately.
+3. `frog.statsJson.wrappedBy = predator.id` is set immediately.
+
+If the struck frog dies (newHp ≤ 0):
+- `predator.lastMealTick` is updated to the current heartbeat number (`Math.floor(Date.now() / 10000)`).
+- No WRAP is queued.
+
+### Targeting Note
+
+STRIKE targets a **tile coordinate**, not an entity ID. This is what makes dodging possible — see "Tile Targeting & Dodging" section below.
+
+---
+
+## WRAP — Full Specification
+
+**File:** `server/actions/wrap.ts`
+**Handler type:** `PredatorActionHandler`
+**Actor:** Snake (predator)
+
+### What it does
+
+WRAP is a **status action** — it locks both the snake and the target frog. The snake cannot hunt while wrapping. The frog cannot move until they break free.
+
+### How it is queued
+
+WRAP is never queued directly by player input or by the snake AI. It is always auto-chained from a successful STRIKE (see above). The STRIKE sets the status flags optimistically; WRAP's execute is the canonical DB write that confirms/re-applies them.
+
+### Escape Mechanic
+
+The frog does **not** roll to escape on a timer. Instead, the escape check fires **inside the validate phase of any frog action** via `rollConditionCheck()` in `server/actions/_conditionUtils.ts`.
+
+```
+escapeRoll = Math.max(frog.statsJson.str, frog.statsJson.dex)
+if (escapeRoll >= 15):
+  frog breaks free → action proceeds normally
+else:
+  FUMBLE — turn consumed struggling
+```
+
+The frog must **attempt an action** to trigger the escape roll. If the frog never acts, they remain wrapped indefinitely.
+
+### Clear conditions
+
+The wrap flags (`statsJson.wrapping` / `statsJson.wrappedBy`) are cleared when:
+- The frog's escape roll succeeds during an action attempt.
+- The frog dies (death is handled by STRIKE or any other damage source).
+
+---
+
+## Tile Targeting & Dodging
+
+All predator actions (SLITHER, STRIKE) target a **specific tile coordinate**, not an entity ID.
+
+This means:
+- If a frog moves to a different tile before the predator's `resolveBucket` is reached, the STRIKE **misses** and is cancelled with no effect.
+- A frog with high DEX (or an item granting fast movement) can dodge a slow snake by stepping out of the target tile before the strike resolves.
+- A snake with high Speed has a lower `Action Tick` delay and is harder to dodge.
+
+**Formula:**
+```
+Action Tick = ((10 - speed) * 2) + d4_roll
+resolveBucket = currentBucket + Action Tick
+```
+
+This applies to ALL entity actions. See ENTITIES.txt for the full initiative table.
+
+---
+
+## Condition System
+
+**File:** `server/actions/_conditionUtils.ts`
+**Export:** `rollConditionCheck(frog: Frog): Promise<{ ok: boolean }>`
+
+### Purpose
+
+A single utility function that encapsulates all frog status-effect checks. Call it at the **top** of any frog action's `validate()` to gate the action against active conditions.
+
+### Usage
+
+```typescript
+import { rollConditionCheck } from "./_conditionUtils";
+
+// Inside validate():
+const condition = await rollConditionCheck(ctx.frog!);
+if (!condition.ok) {
+  return { ok: false, code: "FUMBLE", message: `${ctx.frog!.name} is held and cannot act!` };
+}
+```
+
+- Returns `{ ok: true }` when the frog is free (or just escaped — the escape is written to DB inside the function).
+- Returns `{ ok: false }` when the frog is still held by a condition → caller returns FUMBLE.
+
+### Currently implemented conditions
+
+| Condition | Source             | Flag                  | Escape                              |
+|-----------|--------------------|-----------------------|-------------------------------------|
+| WRAPPED   | Snake STRIKE/WRAP  | `statsJson.wrappedBy` | `Math.max(str, dex) >= 15` on attempt |
+
+### Adding a future condition
+
+Add a new `if` block before `return { ok: true }` in `_conditionUtils.ts`. The utility is designed to chain multiple checks cleanly.
+
+---
+
+## SWING — Full Specification
+
+SWING is the first action implemented using the **Generic Intent Builder** and **server-driven targeting**. It serves as the reference implementation for all future schema-driven combat actions.
+
+### Item Configuration (Slow Ax example)
+
+```json
+{
+  "attackBonus": 5,
+  "grantedActions": ["SWING"],
+  "actionSchema": {
+    "action_name": "SWING",
+    "targeting": {
+      "type": "TILE_SELECT",
+      "count": 3,
+      "adjacency_required": true,
+      "max_range": 1
+    },
+    "cast_time_ms": 4000
+  }
+}
+```
+
+### Targeting Parameters
+
+| Parameter | Value | Meaning |
+|-----------|-------|---------|
+| `type` | `TILE_SELECT` | Player selects N individual tiles on the canvas |
+| `count` | `3` | Player must click exactly 3 tiles before the action auto-submits |
+| `adjacency_required` | `true` | Each tile must be within `max_range` Chebyshev of the frog |
+| `max_range` | `1` | All 3 tiles must be immediately adjacent to or on the frog |
+
+### Timing
+
+- **cast_time_ms**: `4000` (4 seconds)
+- **Sub-ticks deferred**: `ceil(4000 / 500) = 8` buckets
+- Frog is in **Poise** during the cast — no new actions accepted
+
+### Damage Calculation
+
+```
+damage = frog.statsJson.str + frog.statsJson.equippedAttackBonus
+```
+
+Applied once per entity per target tile. If the same entity occupies multiple target tiles (e.g., a future multi-tile Golem), it takes damage multiple times — once per tile hit.
+
+### Multi-Hit Mechanics
+
+The execute phase processes each target tile independently:
+
+1. `getFrogsAtTile(tile.x, tile.y)` — hits every other frog standing on that tile
+2. `getPredatorsAtTile(tile.x, tile.y)` — hits every predator on that tile
+
+There is NO deduplication by entity ID. A large entity flagged at multiple tiles takes damage N times. Friendly fire is ON — the SWING can hit allied frogs. The only exclusion is the acting frog itself.
+
+### Poise
+
+While the SWING is pending in `pending_actions`:
+- `hasPendingActionForFrog(frogId)` returns `true`
+- Any new action submitted via tRPC is rejected: `"Frog is in Poise — an action is already pending."`
+- This check runs at tRPC submission time, NOT inside `runAction()` (see Architecture doc)
+
+### Fumble
+
+If any EQUIPPED item has `blockedActions` containing `"SWING"`, `validate()` returns a FUMBLE, consuming the frog's heartbeat slot. The SWING is never executed.
+
+### Double Validation
+
+The handler's `validate()` re-checks tile ranges at execution time using the frog's current DB position. If the frog moved during the 4-second cast and is now out of range, the SWING silently rejects (no FUMBLE — the frog's heartbeat is not consumed, because the geometry changed, not the frog).
 
 ---
 

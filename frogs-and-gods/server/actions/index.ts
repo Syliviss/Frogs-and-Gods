@@ -8,10 +8,18 @@ import { unequipHandler } from "./unequip";
 import { throwHandler } from "./throw";
 import { storeHandler } from "./store";
 import { giveHandler } from "./give";
+import { swingHandler } from "./swing";
 import { createItemHandler } from "./create_item";
 import { spawnItemHandler } from "./spawn_item";
+import { spawnPredatorHandler } from "./spawn";
+import { killPredatorHandler } from "./kill_predator";
+import { slitherHandler } from "./slither";
+import { strikeHandler } from "./strike";
+import { wrapHandler } from "./wrap";
 import type { GodActionHandler } from "./god_types";
+import type { PredatorActionHandler } from "./_predator_types";
 export { GOD_ACTION_TYPES } from "./_god_action_types";
+export { PREDATOR_ACTION_TYPES } from "./_predator_action_types";
 
 // ─────────────────────────────────────────────
 // ACTION REGISTRY
@@ -27,11 +35,20 @@ const ACTION_REGISTRY: Record<string, ActionHandler> = {
   THROW:      throwHandler,
   STORE_ITEM: storeHandler,
   GIVE:       giveHandler,
+  SWING:      swingHandler,
 };
 
 export const GOD_ACTION_REGISTRY: Record<string, GodActionHandler> = {
-  CREATE_ITEM: createItemHandler,
-  SPAWN_ITEM:  spawnItemHandler,
+  CREATE_ITEM:    createItemHandler,
+  SPAWN_ITEM:     spawnItemHandler,
+  SPAWN_PREDATOR: spawnPredatorHandler,
+  KILL_PREDATOR:  killPredatorHandler,
+};
+
+export const PREDATOR_ACTION_REGISTRY: Record<string, PredatorActionHandler> = {
+  SLITHER: slitherHandler,
+  STRIKE:  strikeHandler,
+  WRAP:    wrapHandler,
 };
 
 export { ACTION_REGISTRY };

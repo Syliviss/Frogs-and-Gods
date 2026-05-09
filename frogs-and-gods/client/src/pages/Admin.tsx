@@ -1,4 +1,4 @@
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo, Fragment, useEffect } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useWorldLog } from "@/hooks/useWorldLog";
@@ -19,6 +19,9 @@ import { ActionLog } from "@/components/ActionLog";
 import { useTickSync } from "@/hooks/useTickSync";
 import { useActionLogs } from "@/hooks/useActionLogs";
 import { InventoryTab } from "@/components/admin/InventoryTab";
+import { EnemiesTab } from "@/components/admin/EnemiesTab";
+import { ImageDropZone } from "@/components/admin/ImageDropZone";
+import { spriteManager } from "@/lib/SpriteManager";
 
 // ─────────────────────────────────────────────
 // HELPERS
@@ -462,6 +465,53 @@ function ChunksTable({ onFocus }: { onFocus: (chunkX: number, chunkY: number) =>
 // ITEMS TAB
 // ─────────────────────────────────────────────
 
+function ItemDetailRow({ itemId }: { itemId: string }) {
+  const { data: item, isLoading } = trpc.admin.getItem.useQuery({ itemId });
+
+  if (isLoading || !item) {
+    return (
+      <tr style={{ background: "#040b14" }}>
+        <td colSpan={8} style={{ padding: "8px 24px", fontSize: 11, color: "#4b5563", fontStyle: "italic" }}>
+          {isLoading ? "Loading…" : "Not found."}
+        </td>
+      </tr>
+    );
+  }
+
+  const fields: [string, string][] = [
+    ["UUID",             item.itemId],
+    ["Name",             item.name],
+    ["Type",             item.itemType],
+    ["State",            item.itemState],
+    ["Rarity Tier",      String(item.rarityTier)],
+    ["Owner ID",         item.ownerId != null ? String(item.ownerId) : "—"],
+    ["Grid X",           item.gridX != null ? String(item.gridX) : "—"],
+    ["Grid Y",           item.gridY != null ? String(item.gridY) : "—"],
+    ["Parent Container", item.parentContainerId ?? "—"],
+    ["Inventory",        item.inventory.length > 0 ? `[${item.inventory.length} items]` : "[]"],
+    ["Remaining Ticks",  String(item.remainingTicks)],
+    ["Stats JSON",       JSON.stringify(item.statsJson)],
+    ["Pixel Data",       item.pixelData ? `${item.pixelData.filter(Boolean).length} opaque / 256` : "none"],
+    ["Created",          new Date(item.createdAt).toLocaleString()],
+    ["Updated",          new Date(item.updatedAt).toLocaleString()],
+  ];
+
+  return (
+    <tr style={{ background: "#040b14" }}>
+      <td colSpan={8} style={{ padding: "8px 16px 12px 24px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "4px 24px" }}>
+          {fields.map(([key, val]) => (
+            <div key={key} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+              <span style={{ fontSize: 10, color: "#4b5563", whiteSpace: "nowrap", minWidth: 96 }}>{key}</span>
+              <span style={{ fontSize: 11, color: "#9ca3af", fontFamily: "monospace", wordBreak: "break-all" }}>{val}</span>
+            </div>
+          ))}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 function ItemsTab() {
   const utils = trpc.useUtils();
   const { data: worldStats } = trpc.admin.getWorldStats.useQuery();
@@ -585,7 +635,10 @@ function ItemsTab() {
             />
           </div>
           <div>
-            <p style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>Pixel Data (256 hex values, one per line — optional)</p>
+            <p style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>Pixel Data (256 hex values — optional)</p>
+            <ImageDropZone
+              onConverted={(pixels) => setCreatePixelStr(pixels.map(p => p ?? "").join("\n"))}
+            />
             <textarea
               value={createPixelStr}
               onChange={(e) => setCreatePixelStr(e.target.value)}
@@ -664,12 +717,7 @@ function ItemsTab() {
                     </td>
                   </tr>
                   {expandedItemId === item.itemId && (
-                    <tr style={{ background: "#080f1c" }}>
-                      <td colSpan={8} style={{ padding: "4px 12px 8px 20px" }}>
-                        <span style={{ fontSize: 11, color: "#6b7280" }}>UUID: </span>
-                        <span style={{ fontFamily: "monospace", fontSize: 12, color: "#e2e8f0" }}>{item.itemId}</span>
-                      </td>
-                    </tr>
+                    <ItemDetailRow itemId={item.itemId} />
                   )}
                   {spawnOpenItemId === item.itemId && (
                     <tr style={{ background: "#080f1c" }}>
@@ -891,6 +939,23 @@ function VisionTab() {
       ...vision.predators.map((p) => ({ gridX: p.gridX, gridY: p.gridY, type: "predator" as const })),
     ];
   }, [vision]);
+
+  // Lazy sprite bake — only fetch pixel data for items not yet in the cache
+  const newItemIds = (vision?.items ?? [])
+    .map(i => i.itemId)
+    .filter(id => !spriteManager.has(id));
+
+  const visionPixelQuery = trpc.frog.getItemPixelData.useQuery(
+    { itemIds: newItemIds },
+    { enabled: newItemIds.length > 0 },
+  );
+
+  useEffect(() => {
+    if (!visionPixelQuery.data) return;
+    for (const { itemId, pixelData } of visionPixelQuery.data) {
+      if (pixelData) spriteManager.bake(itemId, pixelData);
+    }
+  }, [visionPixelQuery.data]);
 
   const [selectedTile, setSelectedTile] = useState<{ gridX: number; gridY: number } | null>(null);
   const [lockedIn, setLockedIn] = useState(false);
@@ -1467,6 +1532,7 @@ export default function Admin() {
               <TabsTrigger value="vision">Vision</TabsTrigger>
               <TabsTrigger value="items">Items</TabsTrigger>
               <TabsTrigger value="inventory">Inventory</TabsTrigger>
+              <TabsTrigger value="enemies">Enemies</TabsTrigger>
               <TabsTrigger value="log">World Log</TabsTrigger>
               <TabsTrigger value="engine">Engine</TabsTrigger>
             </TabsList>
@@ -1489,6 +1555,7 @@ export default function Admin() {
             <TabsContent value="vision"><VisionTab /></TabsContent>
             <TabsContent value="items"><ItemsTab /></TabsContent>
             <TabsContent value="inventory"><InventoryTab /></TabsContent>
+            <TabsContent value="enemies"><EnemiesTab /></TabsContent>
             <TabsContent value="log"><WorldLogTab /></TabsContent>
             <TabsContent value="engine"><EngineTab /></TabsContent>
           </div>

@@ -172,8 +172,15 @@ export const appRouter = router({
       .input(z.object({ frogId: z.number().int().positive() }))
       .query(async ({ input }) => {
         const equipped = await getEquippedItemsByFrogId(input.frogId);
-        const actions = equipped.flatMap((item) => item.statsJson.grantedActions ?? []);
-        return actions;
+        // Return richer objects so the client can build the Generic Intent Builder
+        // when an item has an actionSchema, without hardcoding anything weapon-specific.
+        return equipped.flatMap((item) =>
+          (item.statsJson.grantedActions ?? []).map((actionName) => ({
+            actionName,
+            itemId:       item.itemId,
+            actionSchema: item.statsJson.actionSchema ?? null,
+          })),
+        );
       }),
   }),
 

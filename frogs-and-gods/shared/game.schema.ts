@@ -54,6 +54,21 @@ export const PredatorSchema = z.object({
 });
 export type PredatorInput = z.infer<typeof PredatorSchema>;
 
+export const SpawnPredatorPayloadSchema = z.object({
+  gridX:     z.number().int(),
+  gridY:     z.number().int(),
+  enemyType: EnemyTypeSchema,
+  aiType:    AiTypeSchema,
+  speed:     z.number().int().min(1).max(10).default(5),
+  hp:        z.number().int().min(1).max(100).default(20),
+});
+export type SpawnPredatorPayload = z.infer<typeof SpawnPredatorPayloadSchema>;
+
+export const KillPredatorPayloadSchema = z.object({
+  predatorId: z.number().int().positive(),
+});
+export type KillPredatorPayload = z.infer<typeof KillPredatorPayloadSchema>;
+
 // ─────────────────────────────────────────────
 // WORLD LOG EVENT PAYLOAD
 // ─────────────────────────────────────────────
@@ -187,6 +202,31 @@ export type WorldMapOverrideInput = z.infer<typeof WorldMapOverrideSchema>;
 // ITEMS (vault — 1-of-1)
 // ─────────────────────────────────────────────
 
+// ─────────────────────────────────────────────
+// ACTION SCHEMA (server-driven item targeting)
+// ─────────────────────────────────────────────
+
+export const TargetingSchema = z.object({
+  /** Only TILE_SELECT is currently implemented */
+  type:               z.literal("TILE_SELECT"),
+  /** Number of tiles the player must select before the action auto-submits */
+  count:              z.number().int().positive(),
+  /** Each selected tile must be within max_range (Chebyshev) of the frog */
+  adjacency_required: z.boolean(),
+  /** Maximum Chebyshev distance from frog to each selected tile */
+  max_range:          z.number().int().nonnegative(),
+});
+
+export const ActionSchemaSchema = z.object({
+  /** Must match the ACTION_REGISTRY key on the server (e.g. "SWING") */
+  action_name:  z.string().min(1),
+  targeting:    TargetingSchema,
+  /** How long this action takes to resolve after submission, in milliseconds.
+   *  Server converts to sub-ticks: ceil(cast_time_ms / 500). */
+  cast_time_ms: z.number().int().nonnegative(),
+});
+export type ActionSchema = z.infer<typeof ActionSchemaSchema>;
+
 export const ItemStatsSchema = z.object({
   attackBonus:    z.number().int().optional(),
   defenseBonus:   z.number().int().optional(),
@@ -196,6 +236,9 @@ export const ItemStatsSchema = z.object({
   /** Actions this item blocks (triggers Fumble) while in frog's inventory */
   blockedActions: z.array(z.string()).optional(),
   visionModifier: z.number().int().optional(),
+  /** Targeting + cast parameters for the action this item grants.
+   *  When present, the frontend enters targeting mode instead of acting immediately. */
+  actionSchema:   ActionSchemaSchema.optional(),
 });
 export type ItemStats = z.infer<typeof ItemStatsSchema>;
 

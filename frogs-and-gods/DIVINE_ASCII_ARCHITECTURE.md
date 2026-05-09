@@ -183,7 +183,7 @@ Each redraw runs four sequential passes over the same canvas context:
 
 Ground items are drawn *before* entities so frogs always appear visually on top of loot.
 
-**Pass 4 — Entities.** Draw frogs as green (`#00ff88`) 9×9 squares, predators as red (`#ff4444`) 9×9 squares. No sprite art — entities are always colored squares.
+**Pass 4 — Entities.** Draw frogs as green (`#00ff88`) 9×9 `fillRect` squares. Draw predators as red (`#ff4444`) ASCII `'S'` characters via `ctx.fillText("S", screenX, screenY)` — rendered at the same monospace font as terrain tiles (`bold 12px monospace`, center-aligned, middle baseline). No sprite art — entities render as either colored squares or ASCII glyphs.
 
 **Pass 5 — Selection highlight.** If a tile is selected, draw a yellow (`#facc15`) 18×14 outline rectangle over it.
 
@@ -362,6 +362,96 @@ The selected tile (from click) is stored in React state and passed back to the `
 This is **purely a visual technique**. The interpolated positions exist only on the client canvas. They are never sent to the server, never validated, and have no effect on game logic. The server's database remains the only record of where entities actually are. The canvas is still a dumb projector — it just projects at 60 FPS with smooth transitions between the snapshots it receives.
 
 This approach is sometimes called "dead reckoning lite" or "cosmetic interpolation." It is explicitly **not** client-side prediction — the client makes no assumptions about where an entity *will* be, only about how to visually animate the journey between two server-confirmed positions.
+
+---
+
+---
+
+## Server-Driven Item Actions & The Generic Intent Builder
+
+### The Core Constraint
+
+No item-specific logic lives in the frontend. The browser canvas is a dumb projector and the ActionBar is a dumb renderer. When the game needs a new weapon, the admin creates an item in the database — the frontend adapts automatically.
+
+### action_schema: The Contract
+
+Items can embed a targeting specification inside their `stats_json` JSONB column:
+
+```json
+{
+  "attackBonus": 5,
+  "grantedActions": ["SWING"],
+  "actionSchema": {
+    "action_name": "SWING",
+    "targeting": {
+      "type": "TILE_SELECT",
+      "count": 3,
+      "adjacency_required": true,
+      "max_range": 1
+    },
+    "cast_time_ms": 4000
+  }
+}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `action_name` | string | Must match an `ACTION_REGISTRY` key in `server/actions/index.ts` |
+| `targeting.type` | `"TILE_SELECT"` | Only supported targeting mode (more planned) |
+| `targeting.count` | number | How many tiles the player must click before the action auto-submits |
+| `targeting.adjacency_required` | boolean | Intent flag; for `max_range: 1`, the per-tile Chebyshev check already enforces adjacency |
+| `targeting.max_range` | number | Maximum Chebyshev distance from frog to each target tile |
+| `cast_time_ms` | number | Milliseconds from submission to execution (0 = next sub-tick) |
+
+No migration is required — `stats_json` is already a JSONB column with an open TypeScript index signature.
+
+### Frontend Flow: The Generic Intent Builder
+
+```
+1. getEquippedActions() returns { actionName, itemId, actionSchema }[]
+2. ActionBar renders button: SWING (4s)
+3. Player clicks SWING → intentBuilder.startTargeting(itemId, schema) → TARGETING mode
+4. onMouseMove → canvas Pass 5b: orange hover highlight
+5. Player clicks tile → dist check → append to selectedTiles[] → Pass 5a: red overlay
+6. When count tiles selected → submitItemActionForFrog.mutate() → "Locked In" spinner
+7. Escape or right-click → cancel()
+```
+
+The `useItemIntentBuilder` hook (`client/src/hooks/useItemIntentBuilder.ts`) is a `useReducer` state machine: `"IDLE"` ↔ `"TARGETING"`.
+
+### Backend Flow: Deferred Execution via resolveBucket
+
+```
+resolveBucket = floor(Date.now() / 500) + ceil(cast_time_ms / 500)
+→ For 4000ms: +8 buckets = 4 seconds
+
+Every 500ms: SELECT * FROM pending_actions WHERE resolve_bucket <= currentBucket
+  → Sub-ticks 1–7: SWING row skipped (future bucket)
+  → Sub-tick 8:    SWING row matched → runAction("SWING", ctx) fires
+```
+
+The timer is the database row itself. No `setTimeout` anywhere in the path.
+
+### The Poise Mechanic
+
+```typescript
+// admin.submitItemActionForFrog — at submission, NOT inside runAction():
+const inPoise = await hasPendingActionForFrog(frogId);
+if (inPoise) throw new TRPCError({ code: "BAD_REQUEST", message: "Frog is in Poise." });
+```
+
+The gate is at the tRPC layer only. If it were inside `runAction()`, the SWING row would block its own resolution (the row is still status="pending" when the engine tries to execute it).
+
+### Viewport Rendering Passes (Updated)
+
+| Pass | Content | Style |
+|------|---------|-------|
+| 1 | Terrain tiles | ASCII char |
+| 2 | Ground items | Sprite / pink fallback |
+| 3 | Entities | Frogs: green 9×9 squares; Predators: red `'S'` ASCII glyph via fillText |
+| 4 | Selected tile | Yellow stroke |
+| 5a | Confirmed targeting tiles | Red semi-transparent fill |
+| 5b | Hovered target tile | Orange semi-transparent fill |
 
 ---
 

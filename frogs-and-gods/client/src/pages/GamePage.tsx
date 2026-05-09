@@ -1,12 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Viewport } from "@/components/Viewport";
 import { ActionBar } from "@/components/ActionBar";
 import { ActionLog } from "@/components/ActionLog";
 import { trpc } from "@/lib/trpc";
 import { useTickSync } from "@/hooks/useTickSync";
 import { useActionLogs } from "@/hooks/useActionLogs";
+import { useItemIntentBuilder } from "@/hooks/useItemIntentBuilder";
 import { getTileDef } from "../../../shared/tileRegistry";
 import { spriteManager } from "@/lib/SpriteManager";
+import type { ActionSchema } from "../../../shared/game.schema";
 
 const CHUNK_SIZE = 16;
 
@@ -47,6 +49,20 @@ export default function GamePage() {
     onSuccess: () => setLockedIn(true),
   });
 
+  // ── Generic Intent Builder ──────────────────────────────────────────────
+  const intentBuilder = useItemIntentBuilder({
+    frogId:    selectedFrogId,
+    frogPos:   frogPos ?? playerFrog,
+    onSuccess: () => setLockedIn(true),
+  });
+
+  // Stable reference for Viewport dep-array (avoids spurious redraws)
+  const targetingTiles = useMemo(
+    () => intentBuilder.selectedTiles,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [intentBuilder.selectedTiles],
+  );
+
   // Lazy sprite fetch: only request pixel data for item IDs not yet in the cache
   const newItemIds = (vision?.items ?? [])
     .map(i => i.itemId)
@@ -65,14 +81,10 @@ export default function GamePage() {
   }, [pixelDataQuery.data]);
 
   useTickSync(() => {
-    // Pull position directly from the refetch response so centering updates
-    // in the same state batch as the vision data, without a second render cycle.
     void visionQuery.refetch().then(result => {
       if (!result.data || !selectedFrogId) return;
       const vf = result.data.frogs.find(f => f.id === selectedFrogId);
       if (vf) setFrogPos({ gridX: vf.gridX, gridY: vf.gridY });
-      // Prune canvases for items no longer in view, but keep held inventory items cached.
-      // inventoryQuery provides held item IDs so their sprites survive the prune.
       const groundIds = (result.data.items ?? []).map(i => i.itemId);
       const heldIds   = (inventoryQuery.data ?? []).map(i => i.itemId);
       spriteManager.prune(new Set([...groundIds, ...heldIds]));
@@ -118,11 +130,14 @@ export default function GamePage() {
     });
   };
 
-  const handleAction = (_actionType: string) => {
-    // Item-granted and universal non-movement actions (THROW, etc.)
-    // Will be wired to item selection UI in a future iteration.
-    // For now: placeholder — locked-in state will still apply via WS queue.
-    setLockedIn(true);
+  const handleAction = (actionName: string, _itemId: string, actionSchema?: ActionSchema | null) => {
+    if (actionSchema) {
+      // Schema-driven action: enter the Generic Intent Builder targeting flow
+      intentBuilder.startTargeting(_itemId, actionSchema);
+    } else {
+      // Legacy stub for simple (non-schema) actions
+      setLockedIn(true);
+    }
   };
 
   if (!selectedFrogId) {
@@ -166,8 +181,18 @@ export default function GamePage() {
         chunks={vision?.chunks ?? {}}
         entities={entities}
         groundItems={groundItems}
-        selectedTile={selectedTile ?? undefined}
-        onTileClick={(gridX, gridY) => setSelectedTile({ gridX, gridY })}
+        selectedTile={intentBuilder.mode === "TARGETING" ? undefined : (selectedTile ?? undefined)}
+        onTileClick={(gridX, gridY) => {
+          if (intentBuilder.mode === "TARGETING") {
+            intentBuilder.handleTileClick(gridX, gridY);
+          } else {
+            setSelectedTile({ gridX, gridY });
+          }
+        }}
+        targetingTiles={intentBuilder.mode === "TARGETING" ? targetingTiles : undefined}
+        hoveredTargetTile={intentBuilder.mode === "TARGETING" ? (intentBuilder.hoveredTile ?? undefined) : undefined}
+        onTileHover={intentBuilder.mode === "TARGETING" ? intentBuilder.handleTileHover : undefined}
+        onTileRightClick={intentBuilder.mode === "TARGETING" ? intentBuilder.cancel : undefined}
       />
 
       <ActionLog logs={actionLogs} />
@@ -177,9 +202,11 @@ export default function GamePage() {
         playerFrog={frogPos ?? playerFrog}
         lockedIn={lockedIn}
         equippedActions={equippedActionsQuery.data ?? []}
+        targetingMode={intentBuilder.mode === "TARGETING"}
         onMove={handleMove}
         onAction={handleAction}
-        error={submitMovement.error?.message}
+        onCancelTarget={intentBuilder.cancel}
+        error={submitMovement.error?.message ?? intentBuilder.error}
         tileDef={tileDef}
       />
     </div>

@@ -303,5 +303,98 @@ This is why the admin UI shows "waiting for heartbeat" after submitting an actio
 | Gods | `admin.setDivinePower` | — | `{ godId, amount }` | Direct DB write |
 | World | `admin.spawnChunk` | — | `{ chunkX, chunkY, biome }` | Direct DB write |
 | Items | `admin.spawnItem` | — | `{ name, rarityTier, stats, itemState, ... }` | Direct DB write |
+| GamePage | `admin.submitItemActionForFrog` | SWING (any schema-driven) | `{ frogId, itemId, action, targetTiles }` | Deferred queue (cast_time_ms) |
 
 Only the first five rows go through `pending_actions` and the heartbeat engine. The rest take effect immediately.
+
+---
+
+## 9. Item Action Submission Flow (Generic Intent Builder)
+
+This flow handles schema-driven actions like SWING. It is invoked from the GamePage (not the Admin panel) via the `useItemIntentBuilder` hook.
+
+```
+Player clicks SWING button
+    │
+    └─► ActionBar.onAction(actionName, itemId, actionSchema)
+            │
+            └─► GamePage.handleAction() checks actionSchema != null
+                    │
+                    └─► intentBuilder.startTargeting(itemId, actionSchema)
+                            └─► mode = "TARGETING"
+                            └─► Viewport renders orange hover, red confirmed tiles
+
+Player clicks tile (up to schema.targeting.count times)
+    │
+    └─► intentBuilder.handleTileClick(gridX, gridY)
+            ├─ Client-side Chebyshev guard (dist > max_range → ignore, no penalty)
+            ├─ Append tile to selectedTiles[]
+            └─ If selectedTiles.length === count: auto-submit
+
+──────────────────────────────────────────────────────────────────────────────
+tRPC: admin.submitItemActionForFrog
+──────────────────────────────────────────────────────────────────────────────
+    │
+    ├── Validate: frog exists, alive
+    ├── Validate: item exists, is EQUIPPED by this frog
+    ├── Validate: item.statsJson.actionSchema parses via ActionSchemaSchema
+    ├── Validate: schema.action_name === input.action
+    ├── Validate: targetTiles.length === schema.targeting.count
+    ├── Validate: each tile ≤ max_range Chebyshev from frog (at submission time)
+    │
+    ├── Poise gate: hasPendingActionForFrog(frogId)?
+    │       └─► YES → TRPCError BAD_REQUEST "Frog is in Poise"
+    │
+    └── Queue:
+            actorId       = frogId
+            actionType    = "SWING" (schema.action_name)
+            resolveBucket = floor(Date.now() / 500) + ceil(cast_time_ms / 500)
+            payload       = { itemId, targetTiles }
+            status        = "pending"
+
+    → Client receives { queued: true, resolvesInMs: 4000 }
+    → setLockedIn(true) — ActionBar shows spinner
+
+──────────────────────────────────────────────────────────────────────────────
+4 seconds later: sub-tick fires (resolveBucket matches)
+──────────────────────────────────────────────────────────────────────────────
+    │
+    └─► processAllActions() → runAction("SWING", ctx)
+            │
+            ├── Gate 1: hasFrogActedThisHeartbeat? → skip if already resolved this heartbeat
+            ├── Gate 2: frog alive?
+            │
+            └─► swingHandler.validate()
+                    ├─ item still EQUIPPED? (frog may have un-equipped during cast)
+                    ├─ each tile still within max_range? (frog may have moved)
+                    └─ checkItemFumble() — any EQUIPPED item blocking SWING?
+                    
+            └─► swingHandler.execute()
+                    └─ for each target tile:
+                        getFrogsAtTile(x, y)    → apply damage (str + equippedAttackBonus)
+                        getPredatorsAtTile(x, y) → apply damage
+                        (same entity = multiple tiles → multiple damage hits)
+                        
+            └─► swingHandler.broadcast()
+                    ├─ pushActionLog per damaged entity (category: "combat")
+                    └─ notify(ownerId, { type: "SWING_RESOLVED", targetTiles, damaged })
+
+──────────────────────────────────────────────────────────────────────────────
+10s macro-tick:
+──────────────────────────────────────────────────────────────────────────────
+    └─► ENGINE_TICK → client refetches vision, setLockedIn(false)
+```
+
+### Key Files for This Flow
+
+| File | Role |
+|------|------|
+| `client/src/hooks/useItemIntentBuilder.ts` | Targeting state machine, auto-submit |
+| `client/src/components/Viewport.tsx` | Canvas passes 5a (red) and 5b (orange) |
+| `client/src/components/ActionBar.tsx` | TARGETING mode UI, cancel button |
+| `client/src/pages/GamePage.tsx` | Wires hook → Viewport → ActionBar |
+| `server/routers/admin.ts` → `submitItemActionForFrog` | Validation + deferred queue |
+| `server/actions/swing.ts` | Execution + damage + broadcast |
+| `server/db.ts` → `hasPendingActionForFrog` | Poise gate |
+| `server/db.ts` → `getFrogsAtTile`, `getPredatorsAtTile` | AoE damage queries |
+| `shared/game.schema.ts` → `ActionSchemaSchema` | Canonical targeting schema type |

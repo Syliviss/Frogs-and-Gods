@@ -1,5 +1,6 @@
 import { and, count, desc, eq, gte, inArray, isNotNull, lte, not, or, sql } from "drizzle-orm";
 import { GOD_ACTION_TYPES } from "./actions/_god_action_types";
+import { PREDATOR_ACTION_TYPES } from "./actions/_predator_action_types";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import {
@@ -491,6 +492,25 @@ export async function updateItem(itemId: string, data: Partial<Omit<Item, "itemI
   return updated!;
 }
 
+/** Returns true if the frog has ANY action still in "pending" status (not yet resolved).
+ *  Used as the Poise gate at tRPC submission time: while a deferred action (e.g. SWING)
+ *  is sitting in the queue waiting for its resolveBucket, no new actions may be submitted.
+ *  NOTE: Do NOT call this inside runAction() — it would block the action from resolving itself. */
+export async function hasPendingActionForFrog(frogId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [row] = await db
+    .select({ cnt: count() })
+    .from(pendingActions)
+    .where(
+      and(
+        eq(pendingActions.actorId, frogId),
+        eq(pendingActions.status,  "pending"),
+      ),
+    );
+  return (row?.cnt ?? 0) > 0;
+}
+
 export async function hasFrogActedThisHeartbeat(frogId: number): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
@@ -528,7 +548,7 @@ export async function getPendingActionsToResolve(currentBucket: number): Promise
     .where(and(
       eq(pendingActions.status, "pending"),
       lte(pendingActions.resolveBucket, currentBucket),
-      not(inArray(pendingActions.actionType, [...GOD_ACTION_TYPES])),
+      not(inArray(pendingActions.actionType, [...GOD_ACTION_TYPES, ...PREDATOR_ACTION_TYPES])),
     ));
 }
 
@@ -587,4 +607,84 @@ export async function getPredatorsInChunkArea(
     and(eq(predators.chunkX, c.chunkX), eq(predators.chunkY, c.chunkY))
   );
   return db.select().from(predators).where(or(...conditions));
+}
+
+/** Returns all frogs standing on an exact tile. Used by area-of-effect actions (e.g. SWING). */
+export async function getFrogsAtTile(gridX: number, gridY: number): Promise<Frog[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(frogs).where(
+    and(eq(frogs.gridX, gridX), eq(frogs.gridY, gridY)),
+  );
+}
+
+/** Returns all predators standing on an exact tile. Used by area-of-effect actions (e.g. SWING). */
+export async function getPredatorsAtTile(gridX: number, gridY: number): Promise<Predator[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(predators).where(
+    and(eq(predators.gridX, gridX), eq(predators.gridY, gridY)),
+  );
+}
+
+export async function updatePredatorHp(predatorId: number, newHp: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.update(predators).set({ currentHp: newHp }).where(eq(predators.id, predatorId));
+}
+
+export async function getPredatorById(id: number): Promise<Predator | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(predators).where(eq(predators.id, id)).limit(1);
+  return result[0] ?? undefined;
+}
+
+export async function getActivePredators(): Promise<Predator[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(predators);
+}
+
+export async function updatePredator(
+  id: number,
+  data: Partial<Omit<Predator, "id" | "createdAt">>,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.update(predators).set(data).where(eq(predators.id, id));
+}
+
+export async function getWrappingPredators(): Promise<Predator[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(predators)
+    .where(sql`stats_json->>'wrapping' IS NOT NULL`);
+}
+
+export async function listRecentPredators(limit: number): Promise<Predator[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(predators).orderBy(desc(predators.id)).limit(limit);
+}
+
+export async function deletePredator(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(predators).where(eq(predators.id, id));
+}
+
+export async function getPendingPredatorActions(currentBucket: number): Promise<PendingAction[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(pendingActions)
+    .where(and(
+      eq(pendingActions.status, "pending"),
+      lte(pendingActions.resolveBucket, currentBucket),
+      inArray(pendingActions.actionType, [...PREDATOR_ACTION_TYPES]),
+    ));
 }

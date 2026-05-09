@@ -49,6 +49,8 @@ export class HeartbeatEngine extends EventEmitter {
     this._clearTimers();
     this.phase = "lock_in";
     this._startTimers();
+    // Tick 0 of the new cycle: entity AI calculates intent and queues pending_actions
+    this.emit("cycle_start");
   }
 }
 

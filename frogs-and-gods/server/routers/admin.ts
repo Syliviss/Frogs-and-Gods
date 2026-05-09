@@ -11,12 +11,15 @@ import {
   getFrogById,
   getGodById,
   getInventoryItemsByFrogId,
+  getItemById,
   getItemStats,
   getWorldChunkStats,
+  hasPendingActionForFrog,
   listAllFrogs,
   listAllGods,
   listAllUsers,
   listRecentItems,
+  listRecentPredators,
   listWorldMapChunks,
   setUserRole,
   updateFrog,
@@ -25,15 +28,19 @@ import {
 import type { FrogStats } from "../../drizzle/schema";
 import { xpToNextLevel } from "../engine/xpDistributor";
 import {
+  ActionSchemaSchema,
   CreateFrogSchema,
   CreateItemPayloadSchema,
   GetChunksByCoordsSchema,
+  KillPredatorPayloadSchema,
   MoveTypeSchema,
   SpawnChunkSchema,
   SpawnItemPayloadSchema,
+  SpawnPredatorPayloadSchema,
   type FrogSpecies,
 } from "../../shared/game.schema";
 import { validateAndQueueMovement } from "../engine/movement";
+import { chebyshevDistance } from "../../shared/movement";
 
 const SPECIES_MODIFIERS: Record<FrogSpecies, Partial<FrogStats>> = {
   BULL_FROG:        { str: 1, maxHp: 1 },
@@ -237,6 +244,42 @@ export const adminRouter = router({
     return listRecentItems(50);
   }),
 
+  getItem: publicProcedure
+    .input(z.object({ itemId: z.string().uuid() }))
+    .query(async ({ input }) => {
+      return getItemById(input.itemId);
+    }),
+
+  // ── ENEMIES (DEV) ────────────────────────
+
+  getEnemies: publicProcedure.query(async () => {
+    return listRecentPredators(100);
+  }),
+
+  triggerSpawn: publicProcedure
+    .input(SpawnPredatorPayloadSchema)
+    .mutation(async ({ input }) => {
+      const action = await createPendingAction({
+        actorId:       0,
+        actionType:    "SPAWN_PREDATOR",
+        resolveBucket: Math.floor(Date.now() / 500),
+        payload:       input,
+      });
+      return { queued: true, pendingActionId: action.id };
+    }),
+
+  triggerKill: publicProcedure
+    .input(KillPredatorPayloadSchema)
+    .mutation(async ({ input }) => {
+      const action = await createPendingAction({
+        actorId:       0,
+        actionType:    "KILL_PREDATOR",
+        resolveBucket: Math.floor(Date.now() / 500),
+        payload:       input,
+      });
+      return { queued: true, pendingActionId: action.id };
+    }),
+
   // ── INVENTORY (DEV) ───────────────────────
 
   getInventoryForFrog: publicProcedure
@@ -290,6 +333,86 @@ export const adminRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: result.message });
       }
       return { queued: true, pendingActionId: result.pendingActionId };
+    }),
+
+  // ── ITEM ACTIONS (Generic Intent Builder) ──
+
+  submitItemActionForFrog: publicProcedure
+    .input(z.object({
+      frogId:      z.number().int().positive(),
+      itemId:      z.string().uuid(),
+      action:      z.string().min(1).max(64),
+      targetTiles: z.array(z.object({ x: z.number().int(), y: z.number().int() })).min(1).max(16),
+    }))
+    .mutation(async ({ input }) => {
+      // 1. Resolve frog
+      const frog = await getFrogById(input.frogId);
+      if (!frog) throw new TRPCError({ code: "NOT_FOUND", message: "Frog not found." });
+      if (frog.isDead)  throw new TRPCError({ code: "BAD_REQUEST", message: "Dead frogs cannot act." });
+
+      // 2. Resolve item
+      const item = await getItemById(input.itemId);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Item not found." });
+
+      // 3. Item must be EQUIPPED by this frog
+      if (item.ownerId !== frog.id || item.itemState !== "EQUIPPED") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Item is not equipped by this frog." });
+      }
+
+      // 4. Parse action_schema from the item
+      const schemaParse = ActionSchemaSchema.safeParse(item.statsJson.actionSchema);
+      if (!schemaParse.success) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Item has no valid action schema." });
+      }
+      const schema = schemaParse.data;
+      if (schema.action_name !== input.action) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `Action mismatch: item grants "${schema.action_name}", not "${input.action}".` });
+      }
+
+      // 5. Target tile count must match schema
+      if (input.targetTiles.length !== schema.targeting.count) {
+        throw new TRPCError({
+          code:    "BAD_REQUEST",
+          message: `Expected ${schema.targeting.count} target tile(s), got ${input.targetTiles.length}.`,
+        });
+      }
+
+      // 6. Each tile must be within max_range (Chebyshev from frog)
+      for (const tile of input.targetTiles) {
+        const dist = chebyshevDistance(frog.gridX, frog.gridY, tile.x, tile.y);
+        if (dist > schema.targeting.max_range) {
+          throw new TRPCError({
+            code:    "BAD_REQUEST",
+            message: `Tile (${tile.x},${tile.y}) is ${dist} tiles away — max range is ${schema.targeting.max_range}.`,
+          });
+        }
+      }
+
+      // 7. Poise gate — block if another action is still pending
+      const inPoise = await hasPendingActionForFrog(input.frogId);
+      if (inPoise) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Frog is in Poise — an action is already pending." });
+      }
+
+      // 8. Queue with deferred resolveBucket based on cast_time_ms
+      const castBuckets  = Math.ceil(schema.cast_time_ms / 500);
+      const resolveBucket = Math.floor(Date.now() / 500) + castBuckets;
+
+      const action = await createPendingAction({
+        actorId:       input.frogId,
+        actionType:    input.action,
+        resolveBucket,
+        payload: {
+          itemId:      input.itemId,
+          targetTiles: input.targetTiles,
+        },
+      });
+
+      return {
+        queued:         true,
+        pendingActionId: action.id,
+        resolvesInMs:   schema.cast_time_ms,
+      };
     }),
 
 });

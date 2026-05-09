@@ -60,6 +60,8 @@ export interface FrogStats {
   equippedAttackBonus: number;
   equippedDefenseBonus: number;
   equippedHpBonus:     number;
+  /** Predator id currently constricting this frog. Null or absent = free. */
+  wrappedBy?: number | null;
 }
 
 export const DEFAULT_FROG_STATS: FrogStats = {
@@ -158,6 +160,20 @@ export type InsertPartyInvite = typeof partyInvites.$inferInsert;
 // ITEMS  (vault — 1-of-1 economy)
 // ─────────────────────────────────────────────
 
+/** Targeting parameters embedded in an item's stats_json.
+ *  When present, clicking the action button enters targeting mode on the client.
+ *  The server validates these parameters at both submission time and resolution time. */
+export interface ActionSchema {
+  action_name:  string;
+  targeting: {
+    type:               "TILE_SELECT";
+    count:              number;
+    adjacency_required: boolean;
+    max_range:          number;
+  };
+  cast_time_ms: number;
+}
+
 export interface ItemStats {
   attackBonus?:    number;
   defenseBonus?:   number;
@@ -167,6 +183,8 @@ export interface ItemStats {
   /** Actions this item blocks in the frog's inventory (triggers Fumble) */
   blockedActions?: string[];
   visionModifier?: number;
+  /** Server-driven targeting schema — present on weapons that use the Generic Intent Builder */
+  actionSchema?:   ActionSchema;
   [key: string]:   unknown;
 }
 
@@ -285,6 +303,12 @@ export interface PredatorStats {
   path?:       number[][];
   /** Unique mutation flags */
   mutations?:  string[];
+  /** Body tiles trailing the head. Head position is gridX/gridY; segments[0] = body1, [1] = body2. */
+  segments?:   Array<{ x: number; y: number }>;
+  /** Initiative speed rating 1–10. Higher = acts sooner in the sub-tick bucket. */
+  speed?:      number;
+  /** Active constriction target. Null = snake is free to hunt. */
+  wrapping?:   { targetFrogId: number } | null;
   [key: string]: unknown;
 }
 
