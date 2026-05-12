@@ -52,13 +52,11 @@ export function applyDamage(
       queue.push({
         type: "WORLD_LOG_INSERT",
         data: {
-          frogId: frog.id,
-          frogName: frog.name,
+          frogId:    frog.id,
           eventType: "FROG_DEATH",
-          message: `${frog.name} has died.`,
-          chunkX: Math.floor(frog.gridX / 16),
-          chunkY: Math.floor(frog.gridY / 16),
-          timestamp: Date.now(),
+          payload:   JSON.stringify({ message: `${frog.name} has died.` }),
+          chunkX:    Math.floor(frog.gridX / 16),
+          chunkY:    Math.floor(frog.gridY / 16),
         }
       });
     }

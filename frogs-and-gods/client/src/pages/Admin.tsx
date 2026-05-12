@@ -934,9 +934,15 @@ function VisionTab() {
 
   const entities = useMemo(() => {
     if (!vision) return [];
+    const predatorTiles = vision.predators.flatMap((p) => {
+      const stats = p.statsJson as { segments?: { x: number; y: number }[] } | null;
+      const head = { gridX: p.gridX, gridY: p.gridY, type: "predator" as const };
+      const body = (stats?.segments ?? []).map((s) => ({ gridX: s.x, gridY: s.y, type: "predator" as const }));
+      return [head, ...body];
+    });
     return [
       ...vision.frogs.map((f) => ({ gridX: f.gridX, gridY: f.gridY, type: "frog" as const })),
-      ...vision.predators.map((p) => ({ gridX: p.gridX, gridY: p.gridY, type: "predator" as const })),
+      ...predatorTiles,
     ];
   }, [vision]);
 

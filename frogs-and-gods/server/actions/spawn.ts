@@ -38,7 +38,7 @@ export const spawnPredatorHandler: GodActionHandler = {
       chunkX,
       chunkY,
       currentHp: hp,
-      statsJson: { speed, segments: [{ x: gridX, y: gridY }, { x: gridX, y: gridY }] },
+      statsJson: { speed, segments: [{ x: gridX - 1, y: gridY }, { x: gridX - 2, y: gridY }] },
     };
     
     out.push({ type: "PREDATOR_INSERT", data: predator });

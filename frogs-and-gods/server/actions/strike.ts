@@ -40,10 +40,6 @@ export const strikeHandler: PredatorActionHandler = {
   validate(ctx: PredatorActionContext, predator: Predator, state: SimulatedState): PredatorActionResult {
     const stats = (predator.statsJson ?? {}) as PredatorStats;
 
-    if (stats.wrapping) {
-      return { success: false, error: "Snake is already wrapping a target." };
-    }
-
     const dist = chebyshevDistance(predator.gridX, predator.gridY, ctx.targetGridX, ctx.targetGridY);
     if (dist > 1) {
       return { success: false, error: `STRIKE range is 1 tile (got ${dist}).` };
@@ -79,7 +75,7 @@ export const strikeHandler: PredatorActionHandler = {
     const stats  = (predator.statsJson ?? {}) as PredatorStats;
 
     if (killed) {
-      const predChanges = { lastMealTick: Math.floor(Date.now() / 10000) };
+      const predChanges = { lastMealTick: Math.floor(Date.now() / 10000), statsJson: { ...stats, wrapping: null } };
       state.updatePredator(predator.id, predChanges);
       out.push({ type: "PREDATOR_UPDATE", id: predator.id, changes: predChanges });
       return {

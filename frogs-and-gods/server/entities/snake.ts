@@ -19,7 +19,7 @@ import type { Predator, PredatorStats } from "../../drizzle/schema";
 // Speed 1  → delay 19–22 sub-ticks (may spill into the next heartbeat)
 //
 // State machine:
-//   wrapping != null → hold (frog must act to trigger escape; snake waits)
+//   wrapping != null → STRIKE the trapped frog again
 //   not hungry       → idle (lastMealTick within 18 heartbeats = 3 minutes)
 //   hungry + frog adjacent   → STRIKE
 //   hungry + frog in chunk   → SLITHER toward closest frog
@@ -31,23 +31,38 @@ import type { Predator, PredatorStats } from "../../drizzle/schema";
 export async function calculateSnakeIntent(predator: Predator): Promise<void> {
   const stats = (predator.statsJson ?? {}) as PredatorStats;
 
-  // If currently wrapping a frog, the snake holds — escape is frog-initiated
-  if (stats.wrapping) return;
+  // Find frogs in the snake's 16×16 chunk (needed for both wrapping and hunting)
+  const minGX = predator.chunkX * CHUNK_SIZE;
+  const maxGX = minGX + CHUNK_SIZE - 1;
+  const minGY = predator.chunkY * CHUNK_SIZE;
+  const maxGY = minGY + CHUNK_SIZE - 1;
+  const frogs = await getFrogsInBounds(minGX, maxGX, minGY, maxGY);
+  const alive = frogs.filter((f) => !f.isDead);
+
+  if (stats.wrapping) {
+    // Still coiled — keep striking the trapped frog
+    const target = alive.find((f) => f.id === stats.wrapping!.targetFrogId);
+    if (!target) return; // frog escaped or died; idle until wrapping flag is cleared
+    const speed         = stats.speed ?? 5;
+    const d4            = Math.ceil(Math.random() * 4);
+    const delay         = ((10 - speed) * 2) + d4;
+    const currentBucket = Math.floor(Date.now() / 500);
+    await createPendingAction({
+      actorId:       predator.id,
+      actionType:    "STRIKE",
+      targetGridX:   target.gridX,
+      targetGridY:   target.gridY,
+      resolveBucket: currentBucket + delay,
+      payload:       { targetFrogId: target.id },
+    });
+    return;
+  }
 
   // Hunger check: 18 heartbeats = 3 minutes
   const currentHeartbeat = Math.floor(Date.now() / 10_000);
   const isHungry = currentHeartbeat - predator.lastMealTick > 18;
   if (!isHungry) return;
 
-  // Find frogs in the snake's 16×16 chunk
-  const minGX = predator.chunkX * CHUNK_SIZE;
-  const maxGX = minGX + CHUNK_SIZE - 1;
-  const minGY = predator.chunkY * CHUNK_SIZE;
-  const maxGY = minGY + CHUNK_SIZE - 1;
-  const frogs = await getFrogsInBounds(minGX, maxGX, minGY, maxGY);
-
-  // Filter out dead frogs
-  const alive = frogs.filter((f) => !f.isDead);
   if (alive.length === 0) return;
 
   // Find closest frog by Chebyshev distance
