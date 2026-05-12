@@ -13,7 +13,7 @@ import type { SimulatedState, UpdateInstruction } from "../engine/types";
 //
 // Escape mechanic:
 //   The frog does NOT roll to escape here. Instead, any action the frog attempts
-//   while wrappedBy is set will call rollConditionCheck() in _conditionUtils.ts,
+//   while wrappedBy is set will call rollConditionCheck() in _utils.ts,
 //   which rolls the escape check and either frees them (action proceeds) or fumbles
 //   the turn (frog spends it struggling). No passive sweep required.
 

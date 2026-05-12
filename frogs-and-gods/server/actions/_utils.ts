@@ -1,8 +1,9 @@
-import type { Frog, Predator, Item } from "../../drizzle/schema";
+import type { Frog, PredatorStats } from "../../drizzle/schema";
 import type { TileChar } from "../../shared/game.schema";
 import type { SimulatedState, UpdateInstruction } from "../engine/types";
 import { CHUNK_SIZE } from "../utils/worldGenerator";
 import type { ValidationResult } from "./_types";
+import { pushActionLog } from "../engine/actionLog";
 
 // ─────────────────────────────────────────────
 // SPATIAL UTILITIES
@@ -70,11 +71,68 @@ export function applyDamage(
   }
 }
 
-export function rollConditionCheck(frog: Frog): ValidationResult {
-  // If frog is wrapped, etc.
+/**
+ * Condition gate — call at the top of any frog action's validate() phase.
+ *
+ * Checks all active conditions on the frog in priority order. If the frog is
+ * free to act, returns { ok: true }. If a condition blocks the action, returns
+ * a FUMBLE ValidationResult. If a condition is cleared (e.g. escape from wrap),
+ * the appropriate UpdateInstructions are pushed to `out` so the clear is written
+ * to the DB atomically in the next Exhale.
+ *
+ * Current conditions handled:
+ *   WRAPPED — frog is constricted by a snake.
+ *     - Pass (escape): Math.max(str, dex) >= 15 → UpdateInstructions clear both
+ *       frog.statsJson.wrappedBy and predator.statsJson.wrapping; action proceeds.
+ *     - Fail (held):   frog is still held → return FUMBLE (turn consumed struggling).
+ *
+ * To add a future condition: insert a new branch before the final `return { ok: true }`.
+ *
+ * @param frog  - The acting frog (from SimulatedState, already loaded).
+ * @param state - The current SimulatedState snapshot.
+ * @param out   - The UpdateInstruction queue for this tick; push clears here.
+ * @returns ValidationResult — { ok: true } to proceed, FUMBLE to block.
+ */
+export function rollConditionCheck(
+  frog: Frog,
+  state: SimulatedState,
+  out: UpdateInstruction[]
+): ValidationResult {
+  // ── WRAPPED condition ──
   if (frog.statsJson?.wrappedBy) {
-    return { ok: false, code: "FUMBLE", message: `${frog.name} is held and cannot move!` };
+    const escapeRoll = Math.max(frog.statsJson.str, frog.statsJson.dex);
+
+    if (escapeRoll >= 15) {
+      // Frog breaks free — clear both sides atomically via UpdateInstructions
+      const frogChanges = { statsJson: { ...frog.statsJson, wrappedBy: null } };
+      state.updateFrog(frog.id, frogChanges);
+      out.push({ type: "FROG_UPDATE", id: frog.id, changes: frogChanges });
+
+      const predator = state.getPredator(frog.statsJson.wrappedBy);
+      if (predator) {
+        const ps = (predator.statsJson ?? {}) as PredatorStats;
+        const predChanges = { statsJson: { ...ps, wrapping: null } };
+        state.updatePredator(predator.id, predChanges);
+        out.push({ type: "PREDATOR_UPDATE", id: predator.id, changes: predChanges });
+      }
+
+      pushActionLog({
+        text:     `${frog.name} wrenches free from the snake's coils!`,
+        x:        frog.gridX,
+        y:        frog.gridY,
+        chunk_id: `${Math.floor(frog.gridX / CHUNK_SIZE)}:${Math.floor(frog.gridY / CHUNK_SIZE)}`,
+        category: "combat",
+      });
+
+      return { ok: true };
+    }
+
+    // Held — turn consumed struggling
+    return { ok: false, code: "FUMBLE", message: `${frog.name} struggles against the snake's coils but cannot break free!` };
   }
+
+  // ── Add future conditions here ──
+
   return { ok: true };
 }
 

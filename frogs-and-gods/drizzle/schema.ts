@@ -88,7 +88,10 @@ export const frogs = pgTable("frogs", {
   xpToNextLevel:    integer("xp_to_next_level").default(100).notNull(),
   currentHp:        integer("current_hp").default(100).notNull(),
   currentMana:      integer("current_mana").default(50).notNull(),
-  /** e.g. "healthy" | "poisoned" | "stunned" | "cursed" | "blessed" */
+  /** e.g. "healthy" | "poisoned" | "stunned" | "cursed" | "blessed".
+   *  NOTE: This column is reserved for future condition display but is NOT currently
+   *  read by any action handler. Active conditions are stored in statsJson (e.g. wrappedBy).
+   *  When a full condition system is built, this column should become the source of truth. */
   currentCondition: varchar("current_condition", { length: 64 }).default("healthy").notNull(),
   /** Absolute tile X position in the world grid */
   gridX:            integer("grid_x").default(0).notNull(),
@@ -299,10 +302,6 @@ export type InsertWorldMapOverride = typeof worldMapOverrides.$inferInsert;
 // ─────────────────────────────────────────────
 
 export interface PredatorStats {
-  /** Current movement path or patrol points */
-  path?:       number[][];
-  /** Unique mutation flags */
-  mutations?:  string[];
   /** Body tiles trailing the head. Head position is gridX/gridY; segments[0] = body1, [1] = body2. */
   segments?:   Array<{ x: number; y: number }>;
   /** Initiative speed rating 1–10. Higher = acts sooner in the sub-tick bucket. */

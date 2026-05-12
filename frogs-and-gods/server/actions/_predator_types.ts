@@ -12,6 +12,7 @@ export interface PredatorActionContext {
 
 export interface PredatorActionResult {
   success: boolean;
+  fumble?: boolean;  // true = turn consumed but action failed (e.g. miss); resolves instead of cancels
   data?:   unknown;
   error?:  string;
 }

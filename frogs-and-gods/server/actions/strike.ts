@@ -11,11 +11,14 @@ import { getEntitiesAt, applyDamage } from "./_utils";
 // STRIKE — the snake lunges at the target tile.
 //
 // Damage:     7 flat HP on whatever frog is standing on the tile at resolution time.
-// Miss:       if no frog is on the tile when the action resolves, the attack misses (cancel).
-// Deep water: if the target tile is ≈ the whole action is cancelled (snakes don't bite in water).
+// Miss:       if no frog is on the tile when the action resolves, the snake FUMBLES
+//             (turn consumed, action RESOLVED not cancelled — snake wasted its strike).
+// Deep water: if the target tile is ≈ the action is cancelled (snakes don't bite in water).
 // On hit:     if the frog survives, WRAP is automatically queued for the next sub-tick bucket.
 // On kill:    snake's lastMealTick is updated (hunger resets); no WRAP is queued.
 //
+// Payload:    { targetFrogId } is stored in the pending_action payload by the snake brain
+//             so the tick processor's inhale can preload that frog into SimulatedState.
 // Double-validation: tile type and frog presence are re-checked at execution time.
 
 const STRIKE_DAMAGE = 7;
@@ -62,7 +65,9 @@ export const strikeHandler: PredatorActionHandler = {
 
     const frogsHere = getEntitiesAt(state, ctx.targetGridX, ctx.targetGridY).frogs;
     if (frogsHere.length === 0) {
-      return { success: false, error: "Target frog moved — strike misses." };
+      // Target moved — snake's turn is CONSUMED (fumble), not silently cancelled.
+      // Return success:false with fumble:true so the tick processor resolves the action.
+      return { success: false, fumble: true, error: "Target frog moved — strike misses!" };
     }
 
     const target = frogsHere[0]!;

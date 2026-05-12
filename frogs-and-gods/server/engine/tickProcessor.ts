@@ -164,7 +164,14 @@ export async function processAllActions(notify: NotifyFn = () => {}): Promise<vo
       }
       const result = await handler.execute(ctx, predator, state, updateQueue);
       await handler.broadcast(ctx, predator, result, notify);
-      updateQueue.push({ type: "ACTION_RESOLVE", id: action.id });
+      // fumble:true = miss/wasted turn — RESOLVE so turn is consumed, not silently dropped
+      if (!result.success && result.fumble) {
+        updateQueue.push({ type: "ACTION_RESOLVE", id: action.id });
+      } else if (!result.success) {
+        updateQueue.push({ type: "ACTION_CANCEL", id: action.id });
+      } else {
+        updateQueue.push({ type: "ACTION_RESOLVE", id: action.id });
+      }
     } 
     else if (ACTION_REGISTRY[action.actionType]) {
       const handler = ACTION_REGISTRY[action.actionType];

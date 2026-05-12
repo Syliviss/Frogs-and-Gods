@@ -16,7 +16,10 @@ export function makeMoveHandler(actionType: MoveType): ActionHandler {
     validate(ctx: ActionContext, state: SimulatedState): ValidationResult {
       const frog = ctx.frog!;
 
-      const condition = rollConditionCheck(frog);
+      // Condition check: wrappedBy etc. Pass a scratch array — any escape UpdateInstructions
+      // will be emitted for real in execute() below, which re-runs the check with the real out[].
+      const scratchOut: UpdateInstruction[] = [];
+      const condition = rollConditionCheck(frog, state, scratchOut);
       if (!condition.ok) return condition;
 
       const fumble = checkItemFumble(frog.id, actionType, state);
@@ -49,6 +52,11 @@ export function makeMoveHandler(actionType: MoveType): ActionHandler {
       const frog = ctx.frog!;
       const tx   = ctx.targetGridX!;
       const ty   = ctx.targetGridY!;
+
+      // Re-run condition check with the real out[] so escape instructions are committed.
+      // If validate() already confirmed escape is possible, this will clear the condition.
+      const freshFrog = state.getFrog(frog.id) ?? frog;
+      rollConditionCheck(freshFrog, state, out);
 
       const targetChar = getTerrainAt(state, tx, ty);
       const moveResult = calculateRemainingMove(actionType, frog.statsJson, "#" as TileChar, targetChar);

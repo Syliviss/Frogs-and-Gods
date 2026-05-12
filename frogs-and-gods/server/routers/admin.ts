@@ -264,6 +264,8 @@ export const adminRouter = router({
         actionType:    "SPAWN_PREDATOR",
         resolveBucket: Math.floor(Date.now() / 500),
         payload:       input,
+        targetGridX:   input.gridX,
+        targetGridY:   input.gridY,
       });
       return { queued: true, pendingActionId: action.id };
     }),

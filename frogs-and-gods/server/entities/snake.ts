@@ -61,21 +61,24 @@ export async function calculateSnakeIntent(predator: Predator): Promise<void> {
     }
   }
 
-  // Determine action type and target tile
+  // Determine action type, target tile, and payload
   let actionType: string;
   let targetGridX: number;
   let targetGridY: number;
+  let payload: Record<string, unknown>;
 
   if (closestDist <= 1) {
-    // Adjacent — lunge
+    // Adjacent — lunge. Store frog ID so the inhale can preload them into state.
     actionType  = "STRIKE";
     targetGridX = closestFrog.gridX;
     targetGridY = closestFrog.gridY;
+    payload     = { targetFrogId: closestFrog.id };
   } else {
     // Slither one Chebyshev step toward the closest frog
     actionType  = "SLITHER";
     targetGridX = predator.gridX + Math.sign(closestFrog.gridX - predator.gridX);
     targetGridY = predator.gridY + Math.sign(closestFrog.gridY - predator.gridY);
+    payload     = {};
   }
 
   // Roll initiative: Action Tick = ((10 - speed) * 2) + d4
@@ -91,6 +94,6 @@ export async function calculateSnakeIntent(predator: Predator): Promise<void> {
     targetGridX,
     targetGridY,
     resolveBucket,
-    payload: {},
+    payload,
   });
 }
