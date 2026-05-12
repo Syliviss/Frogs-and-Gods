@@ -1,29 +1,31 @@
-import { getPredatorById, deletePredator } from "../db";
 import type { GodActionHandler, GodActionContext, GodActionResult } from "./god_types";
 import type { NotifyFn } from "./_types";
 import { KillPredatorPayloadSchema } from "../../shared/game.schema";
 import { pushActionLog } from "../engine/actionLog";
+import type { SimulatedState, UpdateInstruction } from "../engine/types";
 
 export const killPredatorHandler: GodActionHandler = {
-  async validate(ctx: GodActionContext): Promise<GodActionResult> {
+  validate(ctx: GodActionContext, state: SimulatedState): GodActionResult {
     const result = KillPredatorPayloadSchema.safeParse(ctx.payload);
     if (!result.success) {
       return { success: false, error: result.error.issues[0]?.message ?? "Invalid payload" };
     }
-    const predator = await getPredatorById(result.data.predatorId);
+    const predatorId = result.data.predatorId;
+    const predator = state.predators.get(predatorId);
     if (!predator) {
-      return { success: false, error: `Predator #${result.data.predatorId} not found.` };
+      return { success: false, error: `Predator #${predatorId} not found.` };
     }
     return { success: true };
   },
 
-  async execute(ctx: GodActionContext): Promise<GodActionResult> {
+  execute(ctx: GodActionContext, state: SimulatedState, out: UpdateInstruction[]): GodActionResult {
     const { predatorId } = KillPredatorPayloadSchema.parse(ctx.payload);
-    await deletePredator(predatorId);
+    state.predators.delete(predatorId);
+    out.push({ type: "PREDATOR_DELETE", id: predatorId });
     return { success: true, data: { predatorId } };
   },
 
-  async broadcast(ctx: GodActionContext, _result: GodActionResult, _notify: NotifyFn): Promise<void> {
+  broadcast(ctx: GodActionContext, _result: GodActionResult, _notify: NotifyFn): void {
     const { predatorId } = ctx.payload as { predatorId: number };
     pushActionLog({
       text:     `Predator #${predatorId} smited by divine will`,

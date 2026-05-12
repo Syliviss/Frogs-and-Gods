@@ -6,8 +6,9 @@ import { heartbeat } from "../engine/heartbeat";
 import { processAllActions } from "../engine/tickProcessor";
 import { processEntityIntents } from "../entities/index";
 import { validateAndQueueMovement } from "../engine/movement";
-import { getFrogByOwnerId, createPendingAction, purgeResolvedActions } from "../db";
+import { getFrogByOwnerId, createPendingAction, purgeResolvedActions, getDb } from "../db";
 import { flushActionLogs } from "../engine/actionLog";
+import { pendingActions, type InsertPendingAction } from "../../drizzle/schema";
 
 // ─────────────────────────────────────────────
 // CONNECTED CLIENTS REGISTRY
@@ -48,6 +49,27 @@ function emitToUser(userId: number, data: unknown): void {
     }
   }
 }
+
+// ─────────────────────────────────────────────
+// INTAKE BUFFER (100ms batch insert)
+// ─────────────────────────────────────────────
+
+let pendingIntents: InsertPendingAction[] = [];
+
+setInterval(() => {
+  if (pendingIntents.length === 0) return;
+  const batch = [...pendingIntents];
+  pendingIntents = [];
+
+  getDb().then(async (db) => {
+    if (!db) return;
+    try {
+      await db.insert(pendingActions).values(batch);
+    } catch (err) {
+      console.error("[WS] Intake Buffer Error:", err);
+    }
+  }).catch((err) => console.error("[WS] Failed to get DB for buffer:", err));
+}, 100);
 
 // ─────────────────────────────────────────────
 // ATTACH WEBSOCKET SERVER
@@ -124,35 +146,51 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
 
             if (MOVE_TYPES.has(msg.actionType)) {
               // Movement: use existing validator (tile lookup + cost check at queue time)
-              void validateAndQueueMovement(
-                client.userId,
-                msg.actionType,
-                msg.targetGridX,
-                msg.targetGridY,
-              ).then((result) => {
-                ws.send(JSON.stringify(
-                  result.ok
-                    ? { type: "ACTION_QUEUED", pendingActionId: result.pendingActionId }
-                    : { type: "ERROR", message: result.message }
-                ));
-              });
-            } else {
-              // Item / other actions: verify frog ownership then queue with payload
-              void getFrogByOwnerId(client.userId).then(async (frog) => {
+              // TODO: This should be refactored into the Inhale/Exhale system later,
+              // but for now we maintain its structure or buffer it?
+              // Actually, validateAndQueueMovement queries the DB directly. We will refactor it
+              // in Phase 2/3. For now, we leave it or buffer it. Let's buffer it!
+              // For Phase 1 we will just buffer the raw intent.
+              
+              // We'll queue it for the heartbeat to resolve.
+              void getFrogByOwnerId(client.userId).then((frog) => {
                 if (!frog) return ws.send(JSON.stringify({ type: "ERROR", message: "No active Frog found." }));
                 if (frog.isDead) return ws.send(JSON.stringify({ type: "ERROR", message: "Dead Frogs cannot act." }));
 
-                const pending = await createPendingAction({
+                const resolveBucket = Math.floor(Date.now() / 500);
+                pendingIntents.push({
                   actorId:       frog.id,
                   actionType:    msg.actionType,
                   targetGridX:   msg.targetGridX ?? null,
                   targetGridY:   msg.targetGridY ?? null,
-                  resolveBucket: Math.floor(Date.now() / 500),
+                  resolveBucket,
                   payload:       msg.payload ?? {},
                 });
-                ws.send(JSON.stringify({ type: "ACTION_QUEUED", pendingActionId: pending.id }));
+                // We don't have pendingActionId immediately anymore
+                ws.send(JSON.stringify({ type: "ACTION_QUEUED", message: "Action buffered." }));
               }).catch(() => {
-                ws.send(JSON.stringify({ type: "ERROR", message: "Failed to queue action." }));
+                ws.send(JSON.stringify({ type: "ERROR", message: "Failed to buffer action." }));
+              });
+
+            } else {
+              // Item / other actions
+              void getFrogByOwnerId(client.userId).then((frog) => {
+                if (!frog) return ws.send(JSON.stringify({ type: "ERROR", message: "No active Frog found." }));
+                if (frog.isDead) return ws.send(JSON.stringify({ type: "ERROR", message: "Dead Frogs cannot act." }));
+
+                const resolveBucket = Math.floor(Date.now() / 500);
+                pendingIntents.push({
+                  actorId:       frog.id,
+                  actionType:    msg.actionType,
+                  targetGridX:   msg.targetGridX ?? null,
+                  targetGridY:   msg.targetGridY ?? null,
+                  resolveBucket,
+                  payload:       msg.payload ?? {},
+                });
+                
+                ws.send(JSON.stringify({ type: "ACTION_QUEUED", message: "Action buffered." }));
+              }).catch(() => {
+                ws.send(JSON.stringify({ type: "ERROR", message: "Failed to buffer action." }));
               });
             }
             break;

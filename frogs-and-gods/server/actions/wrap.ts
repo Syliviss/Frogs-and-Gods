@@ -1,9 +1,9 @@
 import { CHUNK_SIZE } from "../utils/worldGenerator";
 import { pushActionLog } from "../engine/actionLog";
-import { getFrogById, getPredatorById, updatePredator, updateFrog } from "../db";
 import type { PredatorActionContext, PredatorActionResult, PredatorActionHandler } from "./_predator_types";
 import type { Predator, PredatorStats } from "../../drizzle/schema";
 import type { NotifyFn } from "./_types";
+import type { SimulatedState, UpdateInstruction } from "../engine/types";
 
 // WRAP — a status action that constricts both caster and target.
 //
@@ -18,13 +18,13 @@ import type { NotifyFn } from "./_types";
 //   the turn (frog spends it struggling). No passive sweep required.
 
 export const wrapHandler: PredatorActionHandler = {
-  async validate(ctx: PredatorActionContext, predator: Predator): Promise<PredatorActionResult> {
+  validate(ctx: PredatorActionContext, predator: Predator, state: SimulatedState): PredatorActionResult {
     const targetFrogId = ctx.payload.targetFrogId as number | undefined;
     if (typeof targetFrogId !== "number") {
       return { success: false, error: "WRAP requires targetFrogId in payload." };
     }
 
-    const frog = await getFrogById(targetFrogId);
+    const frog = state.frogs.get(targetFrogId);
     if (!frog || frog.isDead) {
       return { success: false, error: "Target frog is gone or dead — wrap cancelled." };
     }
@@ -32,33 +32,33 @@ export const wrapHandler: PredatorActionHandler = {
     return { success: true };
   },
 
-  async execute(ctx: PredatorActionContext, predator: Predator): Promise<PredatorActionResult> {
+  execute(ctx: PredatorActionContext, predator: Predator, state: SimulatedState, out: UpdateInstruction[]): PredatorActionResult {
     const targetFrogId = ctx.payload.targetFrogId as number;
-    const frog = await getFrogById(targetFrogId);
+    const frog = state.frogs.get(targetFrogId);
     if (!frog || frog.isDead) {
       return { success: false, error: "Target frog is gone at resolution — wrap cancelled." };
     }
 
-    // Re-fetch predator for fresh statsJson
-    const freshPredator = await getPredatorById(predator.id);
-    const stats = ((freshPredator ?? predator).statsJson ?? {}) as PredatorStats;
+    const freshPredator = state.predators.get(predator.id)!;
+    const stats = (freshPredator.statsJson ?? {}) as PredatorStats;
 
-    await updatePredator(predator.id, {
-      statsJson: { ...stats, wrapping: { targetFrogId } },
-    });
-    await updateFrog(frog.id, {
-      statsJson: { ...frog.statsJson, wrappedBy: predator.id },
-    });
+    const predChanges = { statsJson: { ...stats, wrapping: { targetFrogId } } };
+    state.updatePredator(predator.id, predChanges);
+    out.push({ type: "PREDATOR_UPDATE", id: predator.id, changes: predChanges });
+
+    const frogChanges = { statsJson: { ...frog.statsJson, wrappedBy: predator.id } };
+    state.updateFrog(frog.id, frogChanges);
+    out.push({ type: "FROG_UPDATE", id: frog.id, changes: frogChanges });
 
     return { success: true, data: { targetFrogId, targetName: frog.name, frogOwnerId: frog.ownerId } };
   },
 
-  async broadcast(
+  broadcast(
     _ctx: PredatorActionContext,
     predator: Predator,
     result: PredatorActionResult,
     notify: NotifyFn,
-  ): Promise<void> {
+  ): void {
     if (!result.success) return;
 
     const { targetName, frogOwnerId } = result.data as {

@@ -1,11 +1,12 @@
-import { createItem } from "../db";
 import { pushActionLog } from "../engine/actionLog";
 import { CreateItemPayloadSchema } from "../../shared/game.schema";
 import type { GodActionHandler, GodActionContext, GodActionResult } from "./god_types";
 import type { NotifyFn } from "./_types";
+import type { SimulatedState, UpdateInstruction } from "../engine/types";
+import crypto from "crypto";
 
 export const createItemHandler: GodActionHandler = {
-  async validate(ctx: GodActionContext): Promise<GodActionResult> {
+  validate(ctx: GodActionContext, state: SimulatedState): GodActionResult {
     const result = CreateItemPayloadSchema.safeParse(ctx.payload);
     if (!result.success) {
       return { success: false, error: result.error.issues[0]?.message ?? "Invalid payload" };
@@ -13,10 +14,9 @@ export const createItemHandler: GodActionHandler = {
     return { success: true };
   },
 
-  async execute(ctx: GodActionContext): Promise<GodActionResult> {
+  execute(ctx: GodActionContext, state: SimulatedState, out: UpdateInstruction[]): GodActionResult {
     const { name, statsJson, pixelData, itemType, rarityTier } = CreateItemPayloadSchema.parse(ctx.payload);
-    // description is accepted but not yet persisted — no DB column yet
-    const item = await createItem({
+    const newItem = {
       itemId:    crypto.randomUUID(),
       name,
       rarityTier,
@@ -24,11 +24,18 @@ export const createItemHandler: GodActionHandler = {
       itemState: "VOID",
       itemType,
       pixelData: pixelData ?? null,
-    });
-    return { success: true, data: { item } };
+      ownerId: null,
+      gridX: null,
+      gridY: null,
+      parentContainerId: null,
+    };
+    
+    state.items.set(newItem.itemId, newItem as any);
+    out.push({ type: "ITEM_INSERT", data: newItem });
+    return { success: true, data: { item: newItem } };
   },
 
-  async broadcast(ctx: GodActionContext, result: GodActionResult, _notify: NotifyFn): Promise<void> {
+  broadcast(ctx: GodActionContext, result: GodActionResult, _notify: NotifyFn): void {
     const { name } = ctx.payload as { name: string };
     pushActionLog({
       text:     `Item created: ${name}`,

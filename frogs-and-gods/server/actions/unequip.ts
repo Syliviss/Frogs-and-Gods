@@ -1,46 +1,40 @@
-import {
-  getItemById,
-  getEquippedItemsByFrogId,
-  updateItem,
-  updateFrog,
-} from "../db";
 import { pushActionLog } from "../engine/actionLog";
-import { checkItemFumble } from "./_types";
 import type { ActionContext, ValidationResult, ExecuteResult, NotifyFn, ActionHandler } from "./_types";
 import { EquipActionSchema } from "../../shared/game.schema";
 import { CHUNK_SIZE } from "../utils/worldGenerator";
+import { checkItemFumble } from "./_utils";
+import type { SimulatedState, UpdateInstruction } from "../engine/types";
 
 export const unequipHandler: ActionHandler = {
   // @param ctx.payload.itemId - UUID of the item to unequip (must be EQUIPPED by this frog)
-  async validate(ctx: ActionContext): Promise<ValidationResult> {
+  validate(ctx: ActionContext, state: SimulatedState): ValidationResult {
     const frog   = ctx.frog!;
     const parsed = EquipActionSchema.safeParse(ctx.payload);
     if (!parsed.success) return { ok: false, message: "itemId required in payload." };
     const { itemId } = parsed.data;
 
-    const item = await getItemById(itemId);
+    const item = state.getItem(itemId);
     if (!item) return { ok: false, message: "Item not found." };
 
     if (item.itemState !== "EQUIPPED" || item.ownerId !== frog.id) {
       return { ok: false, message: "Item is not equipped by this frog." };
     }
 
-    // Item-based fumble check
-    const equippedItems = await getEquippedItemsByFrogId(frog.id);
-    const fumble        = await checkItemFumble(frog.id, "UNEQUIP", equippedItems);
+    const fumble = checkItemFumble(frog.id, "UNEQUIP", state);
     if (fumble) return fumble;
 
     return { ok: true };
   },
 
-  async execute(ctx: ActionContext): Promise<ExecuteResult> {
+  execute(ctx: ActionContext, state: SimulatedState, out: UpdateInstruction[]): ExecuteResult {
     const frog   = ctx.frog!;
     const itemId = ctx.payload.itemId as string;
+    const item = state.getItem(itemId)!;
 
-    await updateItem(itemId, { itemState: "INVENTORY" });
+    state.updateItem(itemId, { itemState: "INVENTORY" });
+    out.push({ type: "ITEM_UPDATE", id: itemId, changes: { itemState: "INVENTORY" } });
 
-    // Recalculate equipped bonuses from remaining EQUIPPED items
-    const remaining  = await getEquippedItemsByFrogId(frog.id);
+    const remaining = Array.from(state.items.values()).filter(i => i.ownerId === frog.id && i.itemState === "EQUIPPED");
     let attackBonus  = 0;
     let defenseBonus = 0;
     let hpBonus      = 0;
@@ -50,25 +44,24 @@ export const unequipHandler: ActionHandler = {
       hpBonus      += eq.statsJson.hpBonus      ?? 0;
     }
 
-    await updateFrog(frog.id, {
-      statsJson: {
-        ...frog.statsJson,
-        equippedAttackBonus:  attackBonus,
-        equippedDefenseBonus: defenseBonus,
-        equippedHpBonus:      hpBonus,
-      },
-    });
+    const newStats = {
+      ...frog.statsJson,
+      equippedAttackBonus:  attackBonus,
+      equippedDefenseBonus: defenseBonus,
+      equippedHpBonus:      hpBonus,
+    };
+    state.updateFrog(frog.id, { statsJson: newStats });
+    out.push({ type: "FROG_UPDATE", id: frog.id, changes: { statsJson: newStats } });
 
-    return { success: true, data: { itemId } };
+    return { success: true, data: { itemId, itemName: item.name } };
   },
 
-  async broadcast(ctx: ActionContext, _result: ExecuteResult, notify: NotifyFn): Promise<void> {
+  broadcast(ctx: ActionContext, result: ExecuteResult, notify: NotifyFn): void {
     const frog   = ctx.frog!;
-    const itemId = ctx.payload.itemId as string;
-    const item   = await getItemById(itemId);
+    const { itemId, itemName } = result.data as { itemId: string; itemName: string };
 
     pushActionLog({
-      text:     `${frog.name} unequipped ${item?.name ?? "an item"}`,
+      text:     `${frog.name} unequipped ${itemName}`,
       x:        frog.gridX,
       y:        frog.gridY,
       chunk_id: `${Math.floor(frog.gridX / CHUNK_SIZE)}:${Math.floor(frog.gridY / CHUNK_SIZE)}`,

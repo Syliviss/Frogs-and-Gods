@@ -1,5 +1,6 @@
 import type { Predator } from "../../drizzle/schema";
 import type { NotifyFn } from "./_types";
+import type { SimulatedState, UpdateInstruction } from "../engine/types";
 
 export interface PredatorActionContext {
   actionType:  string;
@@ -16,7 +17,7 @@ export interface PredatorActionResult {
 }
 
 export interface PredatorActionHandler {
-  validate:  (ctx: PredatorActionContext, predator: Predator) => Promise<PredatorActionResult>;
-  execute:   (ctx: PredatorActionContext, predator: Predator) => Promise<PredatorActionResult>;
-  broadcast: (ctx: PredatorActionContext, predator: Predator, result: PredatorActionResult, notify: NotifyFn) => Promise<void>;
+  validate:  (ctx: PredatorActionContext, predator: Predator, state: SimulatedState) => Promise<PredatorActionResult> | PredatorActionResult;
+  execute:   (ctx: PredatorActionContext, predator: Predator, state: SimulatedState, out: UpdateInstruction[]) => Promise<PredatorActionResult> | PredatorActionResult;
+  broadcast: (ctx: PredatorActionContext, predator: Predator, result: PredatorActionResult, notify: NotifyFn) => Promise<void> | void;
 }

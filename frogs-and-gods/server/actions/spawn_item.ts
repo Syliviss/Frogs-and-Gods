@@ -1,39 +1,39 @@
-import { getItemById, updateItem, getChunksByCoords } from "../db";
 import { pushActionLog } from "../engine/actionLog";
 import { SpawnItemPayloadSchema } from "../../shared/game.schema";
 import type { GodActionHandler, GodActionContext, GodActionResult } from "./god_types";
 import type { NotifyFn } from "./_types";
-
-const CHUNK_SIZE = 16;
+import { CHUNK_SIZE } from "../utils/worldGenerator";
+import type { SimulatedState, UpdateInstruction } from "../engine/types";
 
 export const spawnItemHandler: GodActionHandler = {
-  async validate(ctx: GodActionContext): Promise<GodActionResult> {
+  validate(ctx: GodActionContext, state: SimulatedState): GodActionResult {
     const result = SpawnItemPayloadSchema.safeParse(ctx.payload);
     if (!result.success) {
       return { success: false, error: result.error.issues[0]?.message ?? "Invalid payload" };
     }
     const { itemId, targetX, targetY } = result.data;
 
-    const item = await getItemById(itemId);
+    const item = state.getItem(itemId);
     if (!item) return { success: false, error: `Item ${itemId} not found.` };
 
     const chunkX = Math.floor(targetX / CHUNK_SIZE);
     const chunkY = Math.floor(targetY / CHUNK_SIZE);
-    const chunks = await getChunksByCoords([{ chunkX, chunkY }]);
-    if (chunks.length === 0) {
+    const chunk = state.chunks.get(`${chunkX},${chunkY}`);
+    if (!chunk) {
       return { success: false, error: `Chunk (${chunkX}, ${chunkY}) does not exist. Spawn the chunk first.` };
     }
 
     return { success: true };
   },
 
-  async execute(ctx: GodActionContext): Promise<GodActionResult> {
+  execute(ctx: GodActionContext, state: SimulatedState, out: UpdateInstruction[]): GodActionResult {
     const { itemId, targetX, targetY } = SpawnItemPayloadSchema.parse(ctx.payload);
-    await updateItem(itemId, { itemState: "GROUND", gridX: targetX, gridY: targetY, ownerId: null });
+    state.updateItem(itemId, { itemState: "GROUND", gridX: targetX, gridY: targetY, ownerId: null });
+    out.push({ type: "ITEM_UPDATE", id: itemId, changes: { itemState: "GROUND", gridX: targetX, gridY: targetY, ownerId: null } });
     return { success: true, data: { itemId, gridX: targetX, gridY: targetY } };
   },
 
-  async broadcast(ctx: GodActionContext, result: GodActionResult, _notify: NotifyFn): Promise<void> {
+  broadcast(ctx: GodActionContext, result: GodActionResult, _notify: NotifyFn): void {
     if (!result.success || !result.data) return;
     const { itemId, gridX, gridY } = result.data as { itemId: string; gridX: number; gridY: number };
     const chunkX = Math.floor(gridX / CHUNK_SIZE);

@@ -1,4 +1,5 @@
 import type { Frog, Item } from "../../drizzle/schema";
+import type { SimulatedState, UpdateInstruction } from "../engine/types";
 
 export interface ActionContext {
   frogId:       number;
@@ -43,17 +44,20 @@ export type NotifyFn = (userId: number, data: unknown) => void;
 
 export interface ActionHandler {
   // @param ctx - full action context including resolved frog
+  // @param state - the simulated state for the current tick
   // @returns ValidationResult — FUMBLE code consumes the turn
-  validate:  (ctx: ActionContext) => Promise<ValidationResult>;
+  validate:  (ctx: ActionContext, state: SimulatedState) => Promise<ValidationResult> | ValidationResult;
 
   // @param ctx - same context; only called when validate() returns ok: true
+  // @param state - the simulated state for the current tick
+  // @param out - the UpdateQueue to push db instructions to
   // @returns ExecuteResult with any data relevant to broadcast
-  execute:   (ctx: ActionContext) => Promise<ExecuteResult>;
+  execute:   (ctx: ActionContext, state: SimulatedState, out: UpdateInstruction[]) => Promise<ExecuteResult> | ExecuteResult;
 
   // @param ctx - same context
   // @param result - output from execute()
   // @param notify - sends a WS message to a specific userId
-  broadcast: (ctx: ActionContext, result: ExecuteResult, notify: NotifyFn) => Promise<void>;
+  broadcast: (ctx: ActionContext, result: ExecuteResult, notify: NotifyFn) => Promise<void> | void;
 }
 
 // ─────────────────────────────────────────────

@@ -1,17 +1,12 @@
 import { chebyshevDistance } from "../../shared/movement";
 import { CHUNK_SIZE } from "../utils/worldGenerator";
 import { pushActionLog } from "../engine/actionLog";
-import {
-  getChunksByCoords,
-  getFrogsAtTile,
-  updateFrog,
-  updatePredator,
-  createPendingAction,
-} from "../db";
 import type { PredatorActionContext, PredatorActionResult, PredatorActionHandler } from "./_predator_types";
 import type { Predator, PredatorStats } from "../../drizzle/schema";
 import type { TileChar } from "../../shared/game.schema";
 import type { NotifyFn } from "./_types";
+import type { SimulatedState, UpdateInstruction } from "../engine/types";
+import { getEntitiesAt, applyDamage } from "./_utils";
 
 // STRIKE — the snake lunges at the target tile.
 //
@@ -26,12 +21,12 @@ import type { NotifyFn } from "./_types";
 const STRIKE_DAMAGE = 7;
 const DEEP_WATER: TileChar = "≈";
 
-async function getTileChar(gridX: number, gridY: number): Promise<TileChar> {
+function getTileChar(gridX: number, gridY: number, state: SimulatedState): TileChar {
   const chunkX  = Math.floor(gridX / CHUNK_SIZE);
   const chunkY  = Math.floor(gridY / CHUNK_SIZE);
-  const chunks  = await getChunksByCoords([{ chunkX, chunkY }]);
-  const terrain: string[][] = chunks[0]?.terrainDataJson
-    ? (JSON.parse(chunks[0].terrainDataJson) as string[][])
+  const chunk = state.chunks.get(`${chunkX},${chunkY}`);
+  const terrain: string[][] = chunk?.terrainDataJson
+    ? (JSON.parse(chunk.terrainDataJson) as string[][])
     : [];
   const localX = ((gridX % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
   const localY = ((gridY % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
@@ -39,7 +34,7 @@ async function getTileChar(gridX: number, gridY: number): Promise<TileChar> {
 }
 
 export const strikeHandler: PredatorActionHandler = {
-  async validate(ctx: PredatorActionContext, predator: Predator): Promise<PredatorActionResult> {
+  validate(ctx: PredatorActionContext, predator: Predator, state: SimulatedState): PredatorActionResult {
     const stats = (predator.statsJson ?? {}) as PredatorStats;
 
     if (stats.wrapping) {
@@ -51,7 +46,7 @@ export const strikeHandler: PredatorActionHandler = {
       return { success: false, error: `STRIKE range is 1 tile (got ${dist}).` };
     }
 
-    const tileChar = await getTileChar(ctx.targetGridX, ctx.targetGridY);
+    const tileChar = getTileChar(ctx.targetGridX, ctx.targetGridY, state);
     if (tileChar === DEEP_WATER) {
       return { success: false, error: "Snake cannot strike targets in deep water." };
     }
@@ -59,54 +54,56 @@ export const strikeHandler: PredatorActionHandler = {
     return { success: true };
   },
 
-  async execute(ctx: PredatorActionContext, predator: Predator): Promise<PredatorActionResult> {
-    // Double-validation: re-check tile and frog presence at resolution time
-    const tileChar = await getTileChar(ctx.targetGridX, ctx.targetGridY);
+  execute(ctx: PredatorActionContext, predator: Predator, state: SimulatedState, out: UpdateInstruction[]): PredatorActionResult {
+    const tileChar = getTileChar(ctx.targetGridX, ctx.targetGridY, state);
     if (tileChar === DEEP_WATER) {
       return { success: false, error: "Target tile is deep water at resolution — strike cancelled." };
     }
 
-    const frogsHere = await getFrogsAtTile(ctx.targetGridX, ctx.targetGridY);
+    const frogsHere = getEntitiesAt(state, ctx.targetGridX, ctx.targetGridY).frogs;
     if (frogsHere.length === 0) {
       return { success: false, error: "Target frog moved — strike misses." };
     }
 
     const target = frogsHere[0]!;
-    const newHp  = Math.max(0, target.currentHp - STRIKE_DAMAGE);
-    const killed = newHp <= 0;
+    applyDamage(state, out, "FROG", target.id, STRIKE_DAMAGE);
+    
+    const updatedTarget = state.frogs.get(target.id)!;
+    const killed = updatedTarget.isDead;
+    const newHp = updatedTarget.currentHp;
     const stats  = (predator.statsJson ?? {}) as PredatorStats;
 
-    await updateFrog(target.id, { currentHp: newHp, isDead: killed });
-
     if (killed) {
-      // Hunger resets only on a kill
-      await updatePredator(predator.id, {
-        lastMealTick: Math.floor(Date.now() / 10000),
-      });
+      const predChanges = { lastMealTick: Math.floor(Date.now() / 10000) };
+      state.updatePredator(predator.id, predChanges);
+      out.push({ type: "PREDATOR_UPDATE", id: predator.id, changes: predChanges });
       return {
         success: true,
         data: { targetFrogId: target.id, targetName: target.name, damage: STRIKE_DAMAGE, newHp, killed },
       };
     }
 
-    // Frog survived — queue WRAP for the next sub-tick bucket
     const currentBucket = Math.floor(Date.now() / 500);
-    await createPendingAction({
-      actorId:       predator.id,
-      actionType:    "WRAP",
-      targetGridX:   target.gridX,
-      targetGridY:   target.gridY,
-      resolveBucket: currentBucket + 1,
-      payload:       { targetFrogId: target.id },
+    out.push({
+      type: "ACTION_INSERT",
+      data: {
+        actorId:       predator.id,
+        actorType:     "PREDATOR",
+        actionType:    "WRAP",
+        targetGridX:   target.gridX,
+        targetGridY:   target.gridY,
+        resolveBucket: currentBucket + 1,
+        payload:       { targetFrogId: target.id },
+      }
     });
 
-    // Set status flags on both entities
-    await updatePredator(predator.id, {
-      statsJson: { ...stats, wrapping: { targetFrogId: target.id } },
-    });
-    await updateFrog(target.id, {
-      statsJson: { ...target.statsJson, wrappedBy: predator.id },
-    });
+    const predChanges = { statsJson: { ...stats, wrapping: { targetFrogId: target.id } } };
+    state.updatePredator(predator.id, predChanges);
+    out.push({ type: "PREDATOR_UPDATE", id: predator.id, changes: predChanges });
+
+    const frogChanges = { statsJson: { ...updatedTarget.statsJson, wrappedBy: predator.id } };
+    state.updateFrog(target.id, frogChanges);
+    out.push({ type: "FROG_UPDATE", id: target.id, changes: frogChanges });
 
     return {
       success: true,
@@ -114,12 +111,12 @@ export const strikeHandler: PredatorActionHandler = {
     };
   },
 
-  async broadcast(
+  broadcast(
     _ctx: PredatorActionContext,
     predator: Predator,
     result: PredatorActionResult,
     notify: NotifyFn,
-  ): Promise<void> {
+  ): void {
     if (!result.success) {
       pushActionLog({
         text:     `Snake strike: ${result.error ?? "missed"}`,

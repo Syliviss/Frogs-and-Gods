@@ -1,10 +1,10 @@
 import { chebyshevDistance } from "../../shared/movement";
 import { CHUNK_SIZE } from "../utils/worldGenerator";
 import { pushActionLog } from "../engine/actionLog";
-import { updatePredator } from "../db";
 import type { PredatorActionContext, PredatorActionResult, PredatorActionHandler } from "./_predator_types";
 import type { Predator, PredatorStats } from "../../drizzle/schema";
 import type { NotifyFn } from "./_types";
+import type { SimulatedState, UpdateInstruction } from "../engine/types";
 
 // SLITHER — move the snake's head to an adjacent tile and trail the body behind.
 // The snake is exactly 3 tiles long:
@@ -14,7 +14,7 @@ import type { NotifyFn } from "./_types";
 // and the old tail (segments[1]) is dropped.
 
 export const slitherHandler: PredatorActionHandler = {
-  async validate(ctx: PredatorActionContext, predator: Predator): Promise<PredatorActionResult> {
+  validate(ctx: PredatorActionContext, predator: Predator, state: SimulatedState): PredatorActionResult {
     const dist = chebyshevDistance(predator.gridX, predator.gridY, ctx.targetGridX, ctx.targetGridY);
     if (dist !== 1) {
       return { success: false, error: `SLITHER target must be exactly 1 tile away (got ${dist}).` };
@@ -22,7 +22,7 @@ export const slitherHandler: PredatorActionHandler = {
     return { success: true };
   },
 
-  async execute(ctx: PredatorActionContext, predator: Predator): Promise<PredatorActionResult> {
+  execute(ctx: PredatorActionContext, predator: Predator, state: SimulatedState, out: UpdateInstruction[]): PredatorActionResult {
     const stats   = (predator.statsJson ?? {}) as PredatorStats;
     const current = stats.segments ?? [];
 
@@ -32,13 +32,16 @@ export const slitherHandler: PredatorActionHandler = {
       current[0] ?? { x: predator.gridX, y: predator.gridY },
     ];
 
-    await updatePredator(predator.id, {
+    const changes = {
       gridX:     ctx.targetGridX,
       gridY:     ctx.targetGridY,
       chunkX:    Math.floor(ctx.targetGridX / CHUNK_SIZE),
       chunkY:    Math.floor(ctx.targetGridY / CHUNK_SIZE),
       statsJson: { ...stats, segments: newSegments },
-    });
+    };
+
+    state.updatePredator(predator.id, changes);
+    out.push({ type: "PREDATOR_UPDATE", id: predator.id, changes });
 
     return {
       success: true,
@@ -49,12 +52,12 @@ export const slitherHandler: PredatorActionHandler = {
     };
   },
 
-  async broadcast(
+  broadcast(
     _ctx: PredatorActionContext,
     _predator: Predator,
     result: PredatorActionResult,
     _notify: NotifyFn,
-  ): Promise<void> {
+  ): void {
     if (!result.success) return;
     const { from, to } = result.data as { from: { x: number; y: number }; to: { x: number; y: number } };
     pushActionLog({

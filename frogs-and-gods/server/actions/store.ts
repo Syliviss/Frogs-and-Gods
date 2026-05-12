@@ -1,14 +1,10 @@
-import { getItemById, getEquippedItemsByFrogId, updateItem } from "../db";
 import { pushActionLog } from "../engine/actionLog";
-import { checkItemFumble } from "./_types";
 import type { ActionContext, ValidationResult, ExecuteResult, NotifyFn, ActionHandler } from "./_types";
 import { CHUNK_SIZE } from "../utils/worldGenerator";
-
+import { checkItemFumble } from "./_utils";
+import type { SimulatedState, UpdateInstruction } from "../engine/types";
 export const storeHandler: ActionHandler = {
-  // @param ctx.payload.itemId      - UUID of the item to store inside a container
-  // @param ctx.payload.containerId - UUID of the target container item
-  // @returns FUMBLE if container-in-container attempted, or item-based block
-  async validate(ctx: ActionContext): Promise<ValidationResult> {
+  validate(ctx: ActionContext, state: SimulatedState): ValidationResult {
     const frog        = ctx.frog!;
     const itemId      = ctx.payload.itemId as string | undefined;
     const containerId = ctx.payload.containerId as string | undefined;
@@ -19,77 +15,65 @@ export const storeHandler: ActionHandler = {
       return { ok: false, message: "An item cannot contain itself." };
     }
 
-    const [item, container] = await Promise.all([getItemById(itemId), getItemById(containerId)]);
+    const item = state.getItem(itemId);
+    const container = state.getItem(containerId);
 
     if (!item)      return { ok: false, message: "Item not found." };
     if (!container) return { ok: false, message: "Container not found." };
 
-    // Container-in-container → always Fumble
     if (item.itemType === "CONTAINER") {
-      return {
-        ok:      false,
-        code:    "FUMBLE",
-        message: `${frog.name} fumbled trying to shove a bag into a bag!`,
-      };
+      return { ok: false, code: "FUMBLE", message: `${frog.name} fumbled trying to shove a bag into a bag!` };
     }
 
-    // Container must be a CONTAINER type owned by the frog (EQUIPPED or INVENTORY)
     if (container.itemType !== "CONTAINER") {
       return { ok: false, message: "Target item is not a container." };
     }
-    const containerAccessible =
-      (container.itemState === "EQUIPPED" || container.itemState === "INVENTORY") &&
-      container.ownerId === frog.id;
+    const containerAccessible = (container.itemState === "EQUIPPED" || container.itemState === "INVENTORY") && container.ownerId === frog.id;
     if (!containerAccessible) {
       return { ok: false, message: "Container is not in your possession." };
     }
 
-    // Item being stored must be owned by the frog (EQUIPPED or INVENTORY)
-    const itemAccessible =
-      (item.itemState === "EQUIPPED" || item.itemState === "INVENTORY") &&
-      item.ownerId === frog.id;
+    const itemAccessible = (item.itemState === "EQUIPPED" || item.itemState === "INVENTORY") && item.ownerId === frog.id;
     if (!itemAccessible) {
       return { ok: false, message: "Item is not in your possession." };
     }
 
-    // Item-based fumble check
-    const equipped = await getEquippedItemsByFrogId(frog.id);
-    const fumble   = await checkItemFumble(frog.id, "STORE_ITEM", equipped);
+    const fumble = checkItemFumble(frog.id, "STORE_ITEM", state);
     if (fumble) return fumble;
 
     return { ok: true };
   },
 
-  async execute(ctx: ActionContext): Promise<ExecuteResult> {
+  execute(ctx: ActionContext, state: SimulatedState, out: UpdateInstruction[]): ExecuteResult {
     const itemId      = ctx.payload.itemId as string;
     const containerId = ctx.payload.containerId as string;
 
-    const container = await getItemById(containerId);
+    const container = state.getItem(containerId);
     if (!container) return { success: false };
 
-    // Add itemId to container's inventory array
     const newInventory = [...(container.inventory ?? []), itemId];
-    await updateItem(containerId, { inventory: newInventory });
+    state.updateItem(containerId, { inventory: newInventory });
+    out.push({ type: "ITEM_UPDATE", id: containerId, changes: { inventory: newInventory } });
 
-    // Set item state to ITEM (nested inside a container)
-    await updateItem(itemId, {
+    state.updateItem(itemId, {
       itemState:         "ITEM",
       parentContainerId: containerId,
       gridX:             null,
       gridY:             null,
     });
+    out.push({ type: "ITEM_UPDATE", id: itemId, changes: {
+      itemState: "ITEM", parentContainerId: containerId, gridX: null, gridY: null
+    }});
 
-    return { success: true, data: { itemId, containerId } };
+    return { success: true, data: { itemId, containerId, itemName: state.getItem(itemId)?.name, containerName: container.name } };
   },
 
-  async broadcast(ctx: ActionContext, _result: ExecuteResult, notify: NotifyFn): Promise<void> {
+  broadcast(ctx: ActionContext, result: ExecuteResult, notify: NotifyFn): void {
     const frog        = ctx.frog!;
-    const itemId      = ctx.payload.itemId as string;
-    const containerId = ctx.payload.containerId as string;
-    const [item, container] = await Promise.all([getItemById(itemId), getItemById(containerId)]);
+    const { itemId, containerId, itemName, containerName } = result.data as any;
 
     pushActionLog({
-      text:     `${frog.name} stored ${item?.name ?? "an item"} inside ${container?.name ?? "a container"}`,
+      text:     `${frog.name} stored ${itemName ?? "an item"} inside ${containerName ?? "a container"}`,
       x:        frog.gridX,
       y:        frog.gridY,
       chunk_id: `${Math.floor(frog.gridX / CHUNK_SIZE)}:${Math.floor(frog.gridY / CHUNK_SIZE)}`,
