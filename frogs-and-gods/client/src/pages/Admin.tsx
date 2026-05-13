@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Viewport } from "@/components/Viewport";
+import { WorldInspectorTab } from "@/components/admin/WorldInspectorTab";
 import { FrogCreationPanel } from "./FrogCreationForm";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TILE_REGISTRY, getTileDef } from "../../../shared/tileRegistry";
@@ -23,6 +24,7 @@ import { EnemiesTab } from "@/components/admin/EnemiesTab";
 import { ImageDropZone } from "@/components/admin/ImageDropZone";
 import { ItemStatsForm } from "@/components/admin/ItemStatsForm";
 import { spriteManager } from "@/lib/SpriteManager";
+import { useEquippedActionBar } from "@/hooks/useEquippedActionBar";
 
 // ─────────────────────────────────────────────
 // HELPERS
@@ -963,11 +965,21 @@ function VisionTab() {
   const submitMove = trpc.admin.submitMovementForFrog.useMutation({
     onSuccess: () => setLockedIn(true),
   });
+  const submitAction = trpc.admin.submitActionForFrog.useMutation({
+    onSuccess: () => setLockedIn(true),
+  });
+
+  const equippedActionBar = useEquippedActionBar({
+    frogId:    selectedFrogId,
+    frogPos:   selectedFrog,
+    onSuccess: () => setLockedIn(true),
+  });
 
   useTickSync(() => {
     console.log("Tick Resolved: Refetching Map Vision");
     void refetchVision();
     void refetchAllFrogs();
+    equippedActionBar.refetch();
     setLockedIn(false);
   });
 
@@ -1039,8 +1051,18 @@ function VisionTab() {
               groundItems={(vision?.items ?? [])
                 .filter(i => i.gridX != null && i.gridY != null)
                 .map(i => ({ gridX: i.gridX!, gridY: i.gridY!, itemId: i.itemId }))}
-              selectedTile={selectedTile ?? undefined}
-              onTileClick={(gx, gy) => setSelectedTile({ gridX: gx, gridY: gy })}
+              selectedTile={equippedActionBar.targetingMode ? undefined : (selectedTile ?? undefined)}
+              onTileClick={(gx, gy) => {
+                if (equippedActionBar.targetingMode) {
+                  equippedActionBar.handleTileClick(gx, gy);
+                } else {
+                  setSelectedTile({ gridX: gx, gridY: gy });
+                }
+              }}
+              targetingTiles={equippedActionBar.targetingMode ? equippedActionBar.targetingTiles : undefined}
+              hoveredTargetTile={equippedActionBar.targetingMode ? (equippedActionBar.hoveredTile ?? undefined) : undefined}
+              onTileHover={equippedActionBar.targetingMode ? equippedActionBar.handleTileHover : undefined}
+              onTileRightClick={equippedActionBar.targetingMode ? equippedActionBar.cancelTargeting : undefined}
             />
           )}
         </div>
@@ -1119,7 +1141,8 @@ function VisionTab() {
         selectedTile={selectedTile}
         playerFrog={selectedFrog}
         lockedIn={lockedIn}
-        equippedActions={[]}
+        equippedActions={equippedActionBar.equippedActions}
+        targetingMode={equippedActionBar.targetingMode}
         onMove={(actionType) => {
           if (!selectedFrogId || !selectedTile) return;
           submitMove.mutate({
@@ -1129,8 +1152,18 @@ function VisionTab() {
             targetGridY: selectedTile.gridY,
           });
         }}
-        onAction={() => {}}
-        error={submitMove.error?.message}
+        onAction={equippedActionBar.onAction}
+        onCancelTarget={equippedActionBar.onCancelTarget}
+        onPickup={() => {
+          if (!selectedFrogId || !selectedTile) return;
+          submitAction.mutate({
+            frogId:      selectedFrogId,
+            actionType:  "PICKUP",
+            targetGridX: selectedTile.gridX,
+            targetGridY: selectedTile.gridY,
+          });
+        }}
+        error={submitMove.error?.message ?? submitAction.error?.message ?? equippedActionBar.error}
         tileDef={selectedTile ? getTileDef(
           vision?.chunks[`${Math.floor(selectedTile.gridX / 16)}:${Math.floor(selectedTile.gridY / 16)}`]
             ?.[((selectedTile.gridY % 16) + 16) % 16]
@@ -1552,7 +1585,7 @@ export default function Admin() {
             <TabsContent value="frogs"><FrogsTab /></TabsContent>
             <TabsContent value="gods"><GodsTab /></TabsContent>
             <TabsContent value="loot"><LootTab /></TabsContent>
-            <TabsContent value="world"><WorldTab /></TabsContent>
+            <TabsContent value="world"><WorldInspectorTab /></TabsContent>
             <TabsContent value="vision"><VisionTab /></TabsContent>
             <TabsContent value="items"><ItemsTab /></TabsContent>
             <TabsContent value="inventory"><InventoryTab /></TabsContent>

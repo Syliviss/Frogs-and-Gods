@@ -1,16 +1,20 @@
 # Procedural Generation — Frogs & Gods
 
-This document maps every system in the codebase that generates, randomises, or deterministically derives game content. It covers what is generated, how, and where the code lives.
+This document maps every system in the codebase that generates, randomises, or deterministically derives game content.
 
 ---
 
 ## 1. Overview
 
-Frogs & Gods uses a **narrow, deliberate procedural generation strategy**: the world terrain is fully procedural and deterministic (same seed → same world, always), while items, creatures, and characters are created manually or through player choices. There is no randomised loot, no spawn systems, and no name generation — those are future design spaces.
+Frogs & Gods uses a **narrow, deliberate procedural generation strategy**: the world terrain is fully procedural and deterministic (same seed → same world, always), while items, creatures, and characters are created manually or through player choices.
 
 | System | Procedural? | RNG Type |
 |---|---|---|
-| World terrain | Yes | Seeded Perlin noise |
+| World macro layer (Wolfram CA + radial mask) | Yes | Deterministic bit rules |
+| World terrain (biome + tile noise) | Yes | Seeded Perlin noise |
+| Biome assignment per chunk | Yes | Seeded Perlin noise (offset seed) |
+| Lily pad placement (`%`) | Yes | Deterministic hash per tile |
+| POI tile stamping | Yes (bake-time) | None — code-defined arrays |
 | Chunk seeding script | Yes (orchestration) | None — calls terrain gen |
 | Tile definitions | No | Static data |
 | God terrain overrides | No | Manual/player-authored |
@@ -21,125 +25,197 @@ Frogs & Gods uses a **narrow, deliberate procedural generation strategy**: the w
 
 ---
 
-## 2. World / Terrain Generation
+## 2. World Generation Pipeline
 
-**File:** [server/utils/worldGenerator.ts](server/utils/worldGenerator.ts)
+The pipeline lives in **[server/worldgen/](server/worldgen/)** (7 files). The old entry point `server/utils/worldGenerator.ts` is now a thin backward-compat shim.
 
-This is the core of all procedural generation in the project. It produces a 16×16 grid of ASCII tile characters for any chunk coordinate pair.
+```
+WORLD_SEED (42)
+  │
+  ▼
+Layer 0 ── MACRO LAYER  [server/worldgen/macroLayer.ts]
+  Wolfram Elementary Cellular Automaton on 315×315 chunk grid
+  + radial distance mask from center → density threshold
+  → binary verdict per chunk: VOID or SOLID
+  │
+  ├─ VOID → biome = "void", terrainDataJson = null
+  │
+  └─ SOLID ↓
+  │
+  ▼
+Layer 1 ── BIOME MAPPER  [server/worldgen/biomeMap.ts]
+  Low-frequency Perlin (seed+9999, freq 0.015) at chunk coords
+  → BiomeDef (name, frequency, water/shore/river thresholds)
+  │
+  ▼
+Layer 2 ── NOISE SAMPLER  [server/worldgen/generator.ts]
+  FastNoiseLite Perlin at BiomeDef.frequency
+  Sampled at absolute world tile coordinates (no seams across chunks)
+  │
+  ▼
+Layer 3 ── TILE RESOLVER  [server/worldgen/tileResolver.ts]
+  noise → "≈" / "+" / "~" / "#" per biome thresholds
+  "%" lily pad scattered in deep water via deterministic hash (~2/chunk)
+  │
+  ▼
+Layer 4 ── POI STAMPER  [server/worldgen/poiRegistry.ts]
+  stampPois(cx, cy, grid) → overwrites specific tile positions
+  │
+  ▼
+{ grid: string[][] | null, biome: Biome } → DB upsert
+```
 
 ### Constants
 
 ```ts
-export const CHUNK_SIZE = 16;   // tiles per side
-export const WORLD_SEED = 42;   // global seed — change to get a different world
+// server/worldgen/index.ts
+export const CHUNK_SIZE    = 16;   // tiles per chunk side
+export const WORLD_SEED    = 42;   // global seed
+export const WORLD_GRID_SIZE = 315;  // chunks per world axis
+export const GRID_RADIUS   = 157;  // chunks from center to edge
+export const WOLFRAM_RULE  = 30;   // Wolfram ECA rule number (tunable)
 ```
 
-### The Noise Pipeline
+---
 
-```
-globalSeed (42)
-    │
-    ▼
-FastNoiseLite(globalSeed)
-    SetNoiseType: Perlin
-    SetFrequency: 0.08
-    │
-    ▼
-GetNoise(worldX, worldY)  ← absolute tile coordinates
-    │  returns −1.0 … +1.0
-    ▼
-normalized = (raw + 1) / 2  ← maps to 0.0 … 1.0
-    │
-    ▼
-tileChar(normalized, localX, localY)
-    │  returns one ASCII character
-    ▼
-string[][] grid (16 rows × 16 columns)
-```
+## 3. Layer 0 — Macro Layer (Wolfram CA + Radial Mask)
 
-The absolute world coordinates passed to `GetNoise` are:
-```
-worldX = chunkX * CHUNK_SIZE + localX
-worldY = chunkY * CHUNK_SIZE + localY
-```
+**File:** [server/worldgen/macroLayer.ts](server/worldgen/macroLayer.ts)
 
-This means the noise field is continuous across chunk boundaries — there are no seams.
+Runs at seeding time, once per world generation. Determines which chunks are Void (no terrain) vs Solid (proceed to tile generation).
 
-### Tile Assignment Rules
+### Wolfram ECA
 
-The `tileChar` function maps the normalized noise value to a tile character:
+1. Initialize a row of 315 cells: all 0 except center (col 157) = 1.
+2. Run the automaton for 157 steps, producing 158 rows (row 0 = apex, row 157 = most spread out). After each new row, the right half is mirrored to the left half — this forces bilateral symmetry during CA propagation, not just at the end.
+3. Assemble the 315×315 grid with vertical mirror around row 157 (the center of the 2D grid):
+   - 2D row 157 = CA row 0 (apex — single cell)
+   - 2D rows 156..0 = CA rows 1..157 (going up from center)
+   - 2D rows 158..314 = mirror of CA rows 1..157 (going down)
+
+The result radiates symmetrically from the world center.
+
+### Radial Mask
 
 ```ts
-function tileChar(n: number, x: number, y: number): string {
-  if (n < 0.1) return "≈"; // Deep Lake
-  if (n < 0.3) return "+"; // Shore
-  if (n < 0.4) return "~"; // River
-  return (x + y) % 3 === 0 ? "@" : "#"; // Lily Pad or Land
+dist = sqrt(cx² + cy²) / sqrt(157² + 157²)  // 0.0 at center, 1.0 at corners
+```
+
+### Verdict
+
+```ts
+density = ca_value + dist
+// density >= 1.0 → SOLID (proceed to tile generation)
+// density <  1.0 → VOID  (store biome="void", terrainDataJson=null)
+```
+
+The pre-computed `MACRO_GRID` singleton is a `Uint8Array` of 99,225 bytes computed at module load time.
+
+---
+
+## 4. Layer 1 — Biome Mapper
+
+**File:** [server/worldgen/biomeMap.ts](server/worldgen/biomeMap.ts)
+
+```ts
+export interface BiomeDef {
+  name:            Biome;
+  frequency:       number;   // Perlin noise frequency for tile sampling
+  waterThreshold:  number;   // noise < this → "≈"
+  shoreThreshold:  number;   // noise < this → "+"
+  riverThreshold:  number;   // noise < this → "~"
+  // noise >= riverThreshold → "#"
 }
 ```
 
-| Normalized Value | Extra Condition | Tile | Name |
-|---|---|---|---|
-| `< 0.1` | — | `≈` | Deep Lake |
-| `0.1 – 0.3` | — | `+` | Shore |
-| `0.3 – 0.4` | — | `~` | River |
-| `≥ 0.4` | `(x + y) % 3 === 0` | `@` | Lily Pad |
-| `≥ 0.4` | `(x + y) % 3 !== 0` | `#` | Land |
+| Biome     | frequency | water | shore | river | character         |
+|-----------|-----------|-------|-------|-------|-------------------|
+| grassland | 0.08      | 0.10  | 0.30  | 0.40  | mixed             |
+| swamp     | 0.06      | 0.30  | 0.50  | 0.60  | mostly wet        |
+| forest    | 0.10      | 0.05  | 0.20  | 0.30  | mostly land       |
+| desert    | 0.12      | 0.02  | 0.08  | 0.12  | almost all land   |
+| mountain  | 0.07      | 0.10  | 0.20  | 0.50  | heavy river bands |
+| void      | —         | —     | —     | —     | never generated   |
 
-The Lily Pad / Land split at the land threshold uses a deterministic checkerboard pattern (no RNG) — every third diagonal gets a Lily Pad.
-
-### The `generateChunk` Function
-
-```ts
-export function generateChunk(
-  chunkX: number,
-  chunkY: number,
-  globalSeed: number
-): string[][]
-```
-
-- Creates a new `FastNoiseLite` instance seeded with `globalSeed`
-- Iterates over all 256 tiles (16×16)
-- Computes absolute world coords per tile
-- Returns a `string[][]` — row-major, `grid[y][x]`
-
-Because the seed and noise parameters are fixed constants, `generateChunk` is a **pure function**: identical inputs always produce identical outputs.
+Biome assignment: a second Perlin noise layer at frequency 0.015 (very low → large regions) is sampled at chunk coordinates. This produces smooth, continent-like biome boundaries.
 
 ---
 
-## 3. World Seeding Script
+## 5. Layer 3 — Tile Resolver + Lily Pads
+
+**File:** [server/worldgen/tileResolver.ts](server/worldgen/tileResolver.ts)
+
+All biomes use the same 5-character tile set (`≈ + ~ # %`). No new tile characters were introduced — biomes differ only in their water/shore/river thresholds. The `@` character is retired from generation (kept in the schema for backward compat with any pre-overhaul DB rows).
+
+**Lily pad `%` placement** — deterministic hash, ~2 per chunk in deep water only:
+```ts
+const h = ((worldX * 73856 + worldY * 31337 + seed) % 256 + 256) % 256;
+if (noise < biome.waterThreshold && h < 2) return "%";
+```
+The double-modulo handles JS negative modulo for negative world coordinates.
+
+---
+
+## 6. Layer 4 — POI Stamper
+
+**File:** [server/worldgen/poiRegistry.ts](server/worldgen/poiRegistry.ts)
+
+POIs are TypeScript objects in source code — not DB rows. At seed time, `stampPois()` iterates `POI_REGISTRY` and overwrites specific tiles in the generated grid. After seeding, the chunk is fully self-contained; no POI query is needed at runtime.
+
+```ts
+export interface PoiDef {
+  id:      string;
+  name:    string;
+  type:    PoiType;   // "SHRINE" | "DUNGEON" | "RESOURCE_NODE" | "SPAWN_ZONE" | "LANDMARK"
+  anchorX: number;    // absolute world tile X
+  anchorY: number;    // absolute world tile Y
+  tiles?:  Array<{ dx: number; dy: number; char: string }>;
+}
+```
+
+Changing a POI requires a full reseed (accepted design policy).
+
+---
+
+## 7. World Seeding Script
 
 **File:** [scripts/seedWorld.ts](scripts/seedWorld.ts)
 
-This standalone script is the entry point that populates the database with the initial world. It is run once at setup (or after a db reset) via:
+Seeds the full 315×315 = 99,225 chunk world (5040×5040 tiles). Run with:
 
 ```bash
 npx tsx scripts/seedWorld.ts
+npx tsx scripts/seedWorld.ts --dry-run  # count only, no DB writes
 ```
 
-### What It Does
-
-1. Queries the DB for all chunks in the bounding box `(-4, -4)` to `(4, 4)`.
-2. Builds a set of already-existing chunk keys (`"cx:cy"`).
-3. Iterates over all 81 chunks in the 9×9 grid.
-4. Skips any chunk that already exists (idempotent — safe to re-run).
-5. Calls `generateChunk(cx, cy, WORLD_SEED)` for missing chunks.
-6. Inserts the result into `world_map_chunks` via `createWorldMapChunk()`.
-
-### Storage Format
-
-The `string[][]` from `generateChunk` is serialized as a JSON string and stored in the `terrainDataJson` text column:
-
-```ts
-terrainDataJson: JSON.stringify(terrainGrid)
-// e.g. '[["#","#","@","~",...], ...]'
-```
-
-The `biome` field is set to `"grassland"` for all seeded chunks. The field exists in the schema for future biome-specific generation parameters but is not currently used at runtime.
+Key behaviors:
+- `MACRO_GRID` is computed once before the loop (module-level const).
+- Upserts in batches of 500 chunks — idempotent (safe to re-run).
+- Void chunks: `biome = "void"`, `terrainDataJson = null`.
+- Logs progress every 5,000 chunks.
 
 ---
 
-## 4. Terrain Storage (Database Schema)
+## 8. Tile Registry
+
+**File:** [shared/tileRegistry.ts](shared/tileRegistry.ts)
+
+```ts
+export const TILE_REGISTRY: Record<TileChar, TileDef> = {
+  "≈": { char: "≈", label: "Deep Lake", color: "#1a5f8a", movementCost: 5 },
+  "+": { char: "+", label: "Shore",     color: "#2a7a5a", movementCost: 3 },
+  "~": { char: "~", label: "River",     color: "#1e8870", movementCost: 4 },
+  "@": { char: "@", label: "Lily Pad",  color: "#4a7a20", movementCost: 1 },  // legacy
+  "#": { char: "#", label: "Land",      color: "#5f9a30", movementCost: 2 },
+  "%": { char: "%", label: "Lily Pad",  color: "#4a7a20", movementCost: 1 },  // active
+};
+```
+
+`@` is kept for backward compat with any pre-overhaul terrain data. `%` is the active lily pad character produced by the new generator.
+
+---
+
+## 9. Terrain Storage
 
 **File:** [drizzle/schema.ts](drizzle/schema.ts) — `worldMapChunks` table
 
@@ -149,254 +225,65 @@ worldMapChunks
   chunkX           integer  ──┐ unique together
   chunkY           integer  ──┘
   chunkSize        integer     (always 16)
-  biome            varchar     (always "grassland" for now)
-  terrainDataJson  text        JSON string of string[][]
-  isActive         boolean     (currently unused)
-  entityCount      integer     (currently unused)
+  biome            varchar     ("grassland" | "forest" | "swamp" | "desert" | "mountain" | "void")
+  terrainDataJson  text        JSON string of string[][] (null for void chunks)
+  isActive         boolean
+  entityCount      integer
   lastLoadedAt     timestamp
 ```
 
-Each chunk occupies one row. The terrain is never recomputed at runtime — it is written once by `seedWorld.ts` and read on demand during movement validation.
+---
+
+## 10. Admin World Inspector
+
+**File:** [client/src/components/admin/WorldInspectorTab.tsx](client/src/components/admin/WorldInspectorTab.tsx)
+
+The Admin "World" tab is a read-only inspector for the baked world:
+
+- **Biome coverage canvas** — 315×315 pixel canvas, 1px per chunk, color-coded by biome. Click a pixel to inspect that chunk.
+- **Chunk inspector** — renders the 16×16 ASCII grid of the clicked chunk with tile colors from TILE_REGISTRY.
+- **POI registry list** — auto-generated from `POI_REGISTRY` via `admin.getPoiRegistry` tRPC query.
+
+Data sources: `admin.getAllChunkBiomes` (biome canvas), `admin.getChunksByCoords` (chunk inspector), `admin.getPoiRegistry` (POI list).
 
 ---
 
-## 5. Terrain Lookup During Gameplay
+## 11. Terrain Lookup During Gameplay
 
 **File:** [server/engine/movement.ts](server/engine/movement.ts)
 
-When a frog submits a move, `validateAndQueueMovement` looks up the target tile:
-
-```ts
-// Derive chunk from absolute grid position
-const chunkX = Math.floor(targetGridX / CHUNK_SIZE);
-const chunkY = Math.floor(targetGridY / CHUNK_SIZE);
-
-// Load chunk from DB
-const chunks = await getChunksByCoords([{ chunkX, chunkY }]);
-const terrain: string[][] = JSON.parse(chunks[0].terrainDataJson);
-
-// Convert absolute coords to local (handles negative coords correctly)
-const localX = ((targetGridX % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-const localY = ((targetGridY % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-
-// Read the tile — default to Land if chunk is missing
-const targetChar = (terrain[localY]?.[localX] ?? "#") as TileChar;
-```
-
-The double-modulo pattern `((n % SIZE) + SIZE) % SIZE` correctly handles negative coordinates (e.g. grid position -1 maps to local index 15).
-
-**File:** [server/engine/tickProcessor.ts](server/engine/tickProcessor.ts) applies the same lookup when resolving pending movement actions on the heartbeat tick.
+Movement validation reads the raw `terrainDataJson` from the DB — no changes needed here. Void chunks have `null` terrain; movement into void chunk coords defaults to the "#" land tile (the existing fallback behavior).
 
 ---
 
-## 6. Tile Registry
-
-**File:** [shared/tileRegistry.ts](shared/tileRegistry.ts)
-
-This is not generative code, but it defines the **runtime meaning** of every tile character the generator can produce. It is the single source of truth used by both the isometric renderer and the movement system.
-
-```ts
-export const TILE_REGISTRY: Record<TileChar, TileDef> = {
-  "≈": { char: "≈", label: "Deep Lake", color: "#1a5f8a", movementCost: 5 },
-  "+": { char: "+", label: "Shore",     color: "#2a7a5a", movementCost: 3 },
-  "~": { char: "~", label: "River",     color: "#1e8870", movementCost: 4 },
-  "@": { char: "@", label: "Lily Pad",  color: "#4a7a20", movementCost: 1 },
-  "#": { char: "#", label: "Land",      color: "#5f9a30", movementCost: 2 },
-};
-```
-
-Movement cost is the number of movement points consumed to enter that tile. Lily Pads (cost 1) are the fastest tile — thematically ideal for frogs.
-
----
-
-## 7. God-Authored Terrain Overrides
-
-**File:** [drizzle/schema.ts](drizzle/schema.ts) — `worldMapOverrides` table
-
-Gods (divine-watcher players) can replace individual tiles on the base procedural layer. These overrides are stored separately from the generated terrain:
-
-```
-worldMapOverrides
-  id           serial PK
-  chunkX       integer
-  chunkY       integer
-  gridX        integer  (absolute world tile X)
-  gridY        integer  (absolute world tile Y)
-  newChar      varchar  (replacement ASCII tile char)
-  authorGodId  integer  (FK to gods)
-```
-
-The override system layers on top of `generateChunk` output — at read time, overrides are applied to the base terrain. This preserves the procedural base while allowing divine intervention.
-
----
-
-## 8. XP / Level Progression
-
-**File:** [server/engine/xpDistributor.ts](server/engine/xpDistributor.ts)
-
-Not terrain generation, but a deterministic mathematical system that governs character growth.
-
-### Level Threshold Formula
-
-```ts
-export function xpToNextLevel(level: number): number {
-  const BASE = 100;
-  const SCALE = 1.5;
-  return Math.round(BASE * Math.pow(level, SCALE));
-}
-```
-
-| Level | XP to next level |
-|---|---|
-| 1 | 100 |
-| 2 | 283 |
-| 5 | 1118 |
-| 10 | 3162 |
-| 20 | 8944 |
-
-Adjusting `BASE` or `SCALE` changes the entire curve.
-
-### Party XP Bonus
-
-```ts
-function partyBonus(memberCount: number): number {
-  if (memberCount <= 1) return 1.0;
-  if (memberCount === 2) return 0.85;
-  if (memberCount === 3) return 0.75;
-  return 0.65; // 4-player parties
-}
-```
-
-XP is split equally among living party members after the bonus multiplier is applied. Dead frogs receive no XP.
-
----
-
-## 9. Frog Character Generation
-
-**Files:** [server/routers.ts](server/routers.ts), [server/routers/admin.ts](server/routers/admin.ts)
-
-Frog stats are not random — they are determined entirely by player choices. The system works as follows:
-
-1. **Player distributes 70 stat points** across 7 attributes: `maxHp`, `maxMana`, `str`, `dex`, `wis`, `int`, `cha`.
-2. **Species modifiers** (`SPECIES_MODIFIERS` table) apply +/- deltas to the distributed stats based on the chosen frog species (6 species total).
-3. Final stats are written to `frogs.statsJson` as a `FrogStats` JSON object.
-
-There is no RNG in this flow. All variation comes from player decisions.
-
----
-
-## 10. RNG Usage Map
-
-Every place in the codebase that produces a random value:
+## 12. RNG Usage Map
 
 | File | Context | RNG Used |
 |---|---|---|
-| [server/utils/worldGenerator.ts](server/utils/worldGenerator.ts) | Terrain tile per world coordinate | `FastNoiseLite` seeded Perlin |
+| [server/worldgen/macroLayer.ts](server/worldgen/macroLayer.ts) | Wolfram CA — chunk-level macro grid | Deterministic bit rules (no RNG) |
+| [server/worldgen/biomeMap.ts](server/worldgen/biomeMap.ts) | Biome per chunk | `FastNoiseLite` Perlin (seed+9999) |
+| [server/worldgen/generator.ts](server/worldgen/generator.ts) | Tile noise per tile | `FastNoiseLite` Perlin (seed) |
+| [server/worldgen/tileResolver.ts](server/worldgen/tileResolver.ts) | Lily pad `%` scatter | Deterministic hash |
 | [server/routers/admin.ts](server/routers/admin.ts) | Item UUID on spawn | `crypto.randomUUID()` |
 | [server/routers/admin.ts](server/routers/admin.ts) | Test user ID generation | `Math.random()` (dev-only) |
-| [server/storage.ts](server/storage.ts) | File hash/identifier | `crypto.randomUUID()` |
-| [server/seed/seedWorld.ts](server/seed/seedWorld.ts) | Initial item ID | `crypto.randomUUID()` |
-| [client/src/components/ui/sidebar.tsx](client/src/components/ui/sidebar.tsx) | React render key | `Math.random()` (UI only, not game logic) |
-
-All game-meaningful RNG flows through `FastNoiseLite`. All other `Math.random()` / `crypto.randomUUID()` calls are for IDs or client UI — they have no effect on game state.
-
----
-
-## 11. System Flow Diagram
-
-```
-                      WORLD GENERATION FLOW
-                      ─────────────────────
-
-  WORLD_SEED (42)
-       │
-       ▼
-  FastNoiseLite
-  (Perlin, freq 0.08)
-       │
-       ▼                              ┌─ worldMapChunks table ─┐
-  generateChunk(cx, cy, seed)  ──►   │  terrainDataJson: JSON  │
-       │  (string[][])                └────────────┬───────────┘
-       ▲                                           │
-       │                                           │ JSON.parse on demand
-  seedWorld.ts                                     ▼
-  (81 chunks, idempotent)           movement.ts / tickProcessor.ts
-                                           │
-                                           │ localX/Y lookup
-                                           ▼
-                                    targetChar (tile char)
-                                           │
-                          ┌────────────────┴─────────────────┐
-                          ▼                                   ▼
-                   TILE_REGISTRY                   movementCost check
-                 (label, color, cost)             (validateAndQueueMovement)
-
-
-                    OVERRIDE LAYER (God Powers)
-                    ──────────────────────────
-
-  Base terrain (worldMapChunks)
-       │
-       + worldMapOverrides (per-tile replacements by Gods)
-       │
-       ▼
-  Final terrain seen by frogs
-
-
-                    CHARACTER GROWTH FLOW
-                    ─────────────────────
-
-  Combat victory
-       │  baseXpReward
-       ▼
-  distributeXp(frogs, baseXpReward)
-       │  partyBonus × split per living frog
-       ▼
-  xpToNextLevel(level)  ← 100 × level^1.5
-       │
-       ▼
-  Level up? → frog.level + 1
-```
-
----
-
-## 12. What Is NOT Procedurally Generated
-
-These systems exist in the schema/code but are manually authored, not generated:
-
-- **Item stats and names** — created explicitly via the `spawnItem` admin mutation
-- **Predator placement** — inserted manually; no spawn logic exists yet
-- **Loot drops** — no loot table or drop system is implemented
-- **Character names** — player-specified at frog creation
-- **Quest or dungeon content** — not in the game
-- **Biomes** — the `biome` column exists in `worldMapChunks` and is set to `"grassland"` for all chunks; biome-specific generation is not implemented
 
 ---
 
 ## 13. Extension Points
 
-Where to hook in new procedural systems without disrupting what exists:
+### Tune the Wolfram macro pattern
+In [server/worldgen/macroLayer.ts](server/worldgen/macroLayer.ts): change `WOLFRAM_RULE` (0–255). Rule 30 produces chaotic, complex patterns; Rule 90 produces a Sierpinski triangle; Rule 110 produces complex structures. Reseed after changing.
 
-### Tune the terrain shape
-In [server/utils/worldGenerator.ts](server/utils/worldGenerator.ts):
-- Change `WORLD_SEED` to get a completely different world
-- Adjust `SetFrequency(0.08)` — lower values produce larger landmasses, higher values produce noisier detail
-- Adjust the thresholds in `tileChar` to change the ratio of water to land
-- Switch `SetNoiseType` to `Cellular` or `OpenSimplex2` for different terrain character
+### Add or modify biomes
+In [server/worldgen/biomeMap.ts](server/worldgen/biomeMap.ts): edit `BIOME_REGISTRY` thresholds and `getBiomeForChunk` noise breakpoints. Reseed to apply.
 
-### Add biome-specific generation
-The `biome` column on `worldMapChunks` is already stored. A natural extension would be to:
-1. Assign biomes to chunk coordinates during seeding (e.g. based on a second noise layer)
-2. Pass the biome into `generateChunk` as a parameter
-3. Use different tile thresholds per biome
+### Add POIs
+In [server/worldgen/poiRegistry.ts](server/worldgen/poiRegistry.ts): add a `PoiDef` to `POI_REGISTRY` with `anchorX/Y` (absolute tile coords) and a `tiles[]` array of offsets. Reseed to bake in.
 
 ### Add new tile types
-1. Add the new `TileChar` to the union in [shared/game.schema.ts](shared/game.schema.ts)
-2. Add an entry to `TILE_REGISTRY` in [shared/tileRegistry.ts](shared/tileRegistry.ts) with color and movement cost
-3. Add a threshold branch in `tileChar` in [server/utils/worldGenerator.ts](server/utils/worldGenerator.ts)
+1. Add the char to `TileCharSchema` in [shared/game.schema.ts](shared/game.schema.ts)
+2. Add an entry to `TILE_REGISTRY` in [shared/tileRegistry.ts](shared/tileRegistry.ts)
+3. Emit the new char from a biome's tile resolver in [server/worldgen/tileResolver.ts](server/worldgen/tileResolver.ts)
 
 ### Add procedural item generation
-The `spawnItem` mutation in [server/routers/admin.ts](server/routers/admin.ts) is the current item creation path. A weighted rarity table and stat ranges per `rarityTier` (1–12) could be layered on top without changing the schema.
-
-### Add procedural predator spawning
-The `predators` table in [drizzle/schema.ts](drizzle/schema.ts) already has `enemyType` (`SNAKE` | `FLY`), `aiType` (`HUNTER` | `REACTIVE` | `DOCILE`), and `statsJson` for flexible AI state. A spawn system would determine spawn locations (e.g. snakes on `#` land tiles, flies over `≈` water) and densities per chunk.
+The `spawnItem` mutation in [server/routers/admin.ts](server/routers/admin.ts) is the current item creation path. A weighted rarity table and stat ranges per `rarityTier` (1–12) could be layered on top without schema changes.

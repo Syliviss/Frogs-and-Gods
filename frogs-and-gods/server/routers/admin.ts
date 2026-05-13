@@ -6,6 +6,7 @@ import {
   createPendingAction,
   createUserWithOpenId,
   createWorldMapChunk,
+  getAllChunkBiomes,
   getChunksByCoords,
   getEquippedItemsByFrogId,
   getFrogById,
@@ -25,6 +26,7 @@ import {
   updateFrog,
   updateGod,
 } from "../db";
+import { POI_REGISTRY } from "../worldgen/index";
 import type { FrogStats } from "../../drizzle/schema";
 import { xpToNextLevel } from "../engine/xpDistributor";
 import {
@@ -50,7 +52,7 @@ const SPECIES_MODIFIERS: Record<FrogSpecies, Partial<FrogStats>> = {
   GUIRO_FROG:       { cha: 4 },
   POISON_DART_FROG: {},
 };
-import { generateChunk, WORLD_SEED } from "../utils/worldGenerator";
+import { generateChunk, MACRO_GRID, WORLD_SEED } from "../worldgen/index";
 
 // ─────────────────────────────────────────────
 // ADMIN ROUTER
@@ -188,19 +190,34 @@ export const adminRouter = router({
   spawnChunk: publicProcedure
     .input(SpawnChunkSchema)
     .mutation(async ({ input }) => {
-      const terrainGrid = generateChunk(input.chunkX, input.chunkY, WORLD_SEED);
+      const { grid: terrainGrid, biome: resolvedBiome } = generateChunk(input.chunkX, input.chunkY, WORLD_SEED, MACRO_GRID);
       const chunk = await createWorldMapChunk({
         chunkX:          input.chunkX,
         chunkY:          input.chunkY,
         chunkSize:       input.chunkSize,
-        biome:           input.biome,
-        terrainDataJson: JSON.stringify(terrainGrid),
+        biome:           resolvedBiome,
+        terrainDataJson: terrainGrid ? JSON.stringify(terrainGrid) : null,
       });
       return { success: true, chunk };
     }),
 
   listChunks: publicProcedure.query(async () => {
     return listWorldMapChunks();
+  }),
+
+  getAllChunkBiomes: publicProcedure.query(async () => {
+    return getAllChunkBiomes();
+  }),
+
+  getPoiRegistry: publicProcedure.query(() => {
+    return POI_REGISTRY.map((poi) => ({
+      id:        poi.id,
+      name:      poi.name,
+      type:      poi.type,
+      anchorX:   poi.anchorX,
+      anchorY:   poi.anchorY,
+      tileCount: poi.tiles?.length ?? 0,
+    }));
   }),
 
   getChunksByCoords: publicProcedure
@@ -235,6 +252,8 @@ export const adminRouter = router({
         actorId:       0,
         actionType:    "SPAWN_ITEM",
         resolveBucket: Math.floor(Date.now() / 500),
+        targetGridX:   input.targetX,
+        targetGridY:   input.targetY,
         payload:       { itemId: input.itemId, targetX: input.targetX, targetY: input.targetY },
       });
       return { queued: true, pendingActionId: action.id };
@@ -298,15 +317,19 @@ export const adminRouter = router({
 
   submitActionForFrog: publicProcedure
     .input(z.object({
-      frogId:     z.number().int().positive(),
-      actionType: z.string().min(1).max(64),
-      payload:    z.record(z.string(), z.unknown()).optional(),
+      frogId:      z.number().int().positive(),
+      actionType:  z.string().min(1).max(64),
+      targetGridX: z.number().int().optional(),
+      targetGridY: z.number().int().optional(),
+      payload:     z.record(z.string(), z.unknown()).optional(),
     }))
     .mutation(async ({ input }) => {
       const action = await createPendingAction({
         actorId:       input.frogId,
         actionType:    input.actionType,
         resolveBucket: Math.floor(Date.now() / 500),
+        targetGridX:   input.targetGridX,
+        targetGridY:   input.targetGridY,
         payload:       input.payload ?? {},
       });
       return { queued: true, pendingActionId: action.id };

@@ -105,11 +105,15 @@ worldY = round(v / 8 - u / 16)
 ### Client Routing
 
 wouter `<Switch>` in `client/src/App.tsx`:
-- `/` → `Admin` (the dev console)
+- `/` → `Admin` (the active development UI — see below)
 - `/game` → `GamePage` (placeholder; not yet player-facing)
 - `/create-frog` → `FrogCreationForm`
 
-The Admin panel (`client/src/pages/Admin.tsx`) is the primary dev UI. It has tabbed sections for Users, Frogs, Gods, World (isometric map), Items, World Log, and Engine pulse.
+### Primary Development Target: Admin Panel
+
+**All active UI development happens in the Admin panel** (`client/src/pages/Admin.tsx` and its sub-components in `client/src/components/admin/`). It is the functional prototype for the eventual player-facing UI — not a throwaway dev tool. Features built here will be ported to the player UI once validated, so treat it with production-level care: good UX, correct state, no placeholders.
+
+The Admin panel has tabbed sections for Users, Frogs, Gods, World (isometric map), Items, World Log, and Engine pulse. When adding game features, wire them into the Admin panel first. `GamePage` (`/game`) is a secondary scratch area and is not the current focus.
 
 ### Shared Code
 

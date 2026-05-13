@@ -323,6 +323,33 @@ export async function createWorldMapChunk(data: InsertWorldMapChunk): Promise<Wo
   return chunk!;
 }
 
+export async function batchCreateWorldMapChunks(chunks: InsertWorldMapChunk[]): Promise<void> {
+  if (chunks.length === 0) return;
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db
+    .insert(worldMapChunks)
+    .values(chunks)
+    .onConflictDoUpdate({
+      target: [worldMapChunks.chunkX, worldMapChunks.chunkY],
+      set: {
+        terrainDataJson: sql`excluded.terrain_data_json`,
+        biome:           sql`excluded.biome`,
+        updatedAt:       sql`now()`,
+      },
+    });
+}
+
+export async function getAllChunkBiomes(): Promise<
+  { chunkX: number; chunkY: number; biome: string }[]
+> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({ chunkX: worldMapChunks.chunkX, chunkY: worldMapChunks.chunkY, biome: worldMapChunks.biome })
+    .from(worldMapChunks);
+}
+
 export async function getWorldChunkStats(): Promise<{ totalChunks: number; activeChunks: number }> {
   const db = await getDb();
   if (!db) return { totalChunks: 0, activeChunks: 0 };
@@ -575,6 +602,21 @@ export async function getPendingGodActions(currentBucket: number): Promise<Pendi
       lte(pendingActions.resolveBucket, currentBucket),
       inArray(pendingActions.actionType, [...GOD_ACTION_TYPES]),
     ));
+}
+
+export async function purgeDeadFrogs(): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.transaction(async (tx) => {
+    const deadFrogs = await tx.select({ id: frogs.id }).from(frogs).where(eq(frogs.isDead, true));
+    const deadIds = deadFrogs.map((f) => f.id);
+    if (deadIds.length === 0) return;
+    await tx.update(items)
+      .set({ itemState: "VOID", ownerId: null, gridX: null, gridY: null })
+      .where(inArray(items.ownerId, deadIds));
+    await tx.delete(frogs).where(inArray(frogs.id, deadIds));
+    console.log(`[Cleanup] Purged ${deadIds.length} dead frog(s) and voided their items.`);
+  });
 }
 
 export async function purgeResolvedActions(): Promise<number> {

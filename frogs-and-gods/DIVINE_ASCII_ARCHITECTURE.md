@@ -35,13 +35,14 @@ world_map_chunks (
 
 `terrain_data_json` deserializes to `string[][]` — a 16×16 grid of single ASCII characters. Each character maps to a tile type via the shared `TILE_REGISTRY`:
 
-| Char | Tile      | Color     | Move Cost |
-|------|-----------|-----------|-----------|
-| `≈`  | Deep Lake | `#1a5f8a` | 5         |
-| `+`  | Shore     | `#2a7a5a` | 3         |
-| `~`  | River     | `#1e8870` | 4         |
-| `@`  | Lily Pad  | `#4a7a20` | 1         |
-| `#`  | Land      | `#5f9a30` | 2         |
+| Char | Tile      | Color     | Move Cost | Notes |
+|------|-----------|-----------|-----------|-------|
+| `≈`  | Deep Lake | `#1a5f8a` | 5         | |
+| `+`  | Shore     | `#2a7a5a` | 3         | |
+| `~`  | River     | `#1e8870` | 4         | |
+| `@`  | Lily Pad  | `#4a7a20` | 1         | Legacy — kept for backward compat with pre-overhaul chunks |
+| `#`  | Land      | `#5f9a30` | 2         | |
+| `%`  | Lily Pad  | `#4a7a20` | 1         | Active — produced by new generator, appears in water ~2/chunk |
 
 All entity positions (`frogs`, `predators`, `items`) are stored as absolute world-grid coordinates (`gridX`, `gridY`). There is no "client position" concept. A frog is where the database says it is.
 

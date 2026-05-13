@@ -64,8 +64,13 @@ export function applyDamage(
     const predator = state.getPredator(id);
     if (!predator || predator.currentHp <= 0) return;
     const newHp = Math.max(0, predator.currentHp - amount);
-    state.updatePredator(id, { currentHp: newHp });
-    queue.push({ type: "PREDATOR_UPDATE", id, changes: { currentHp: newHp } });
+    if (newHp === 0) {
+      state.predators.delete(id);
+      queue.push({ type: "PREDATOR_DELETE", id });
+    } else {
+      state.updatePredator(id, { currentHp: newHp });
+      queue.push({ type: "PREDATOR_UPDATE", id, changes: { currentHp: newHp } });
+    }
   }
 }
 

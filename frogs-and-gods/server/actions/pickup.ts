@@ -7,20 +7,22 @@ import { CHUNK_SIZE } from "../utils/worldGenerator";
 
 export const pickupHandler: ActionHandler = {
   validate(ctx: ActionContext, state: SimulatedState): ValidationResult {
-    const frog   = ctx.frog!;
-    const itemId = ctx.payload.itemId as string | undefined;
-    if (!itemId) return { ok: false, message: "itemId required in payload." };
+    const frog = ctx.frog!;
+    const targetX = ctx.targetGridX;
+    const targetY = ctx.targetGridY;
 
-    const item = state.getItem(itemId);
-    if (!item) return { ok: false, message: "Item not found." };
-
-    if (item.itemState !== "GROUND" || item.gridX == null || item.gridY == null) {
-      return { ok: false, message: "Item is not on the ground." };
+    if (targetX == null || targetY == null) {
+      return { ok: false, message: "Target coordinates required." };
     }
 
-    const dist = chebyshevDistance(frog.gridX, frog.gridY, item.gridX, item.gridY);
+    const dist = chebyshevDistance(frog.gridX, frog.gridY, targetX, targetY);
     if (dist > 1) {
-      return { ok: false, message: "Item is out of reach." };
+      return { ok: false, code: "FUMBLE", message: `${frog.name} reaches but (${targetX}, ${targetY}) is too far away.` };
+    }
+
+    const groundItems = state.getItemsAt(targetX, targetY);
+    if (groundItems.length === 0) {
+      return { ok: false, code: "FUMBLE", message: `${frog.name} reaches down but finds nothing there.` };
     }
 
     const allFrogItems = Array.from(state.items.values()).filter(i => i.ownerId === frog.id);
@@ -40,9 +42,9 @@ export const pickupHandler: ActionHandler = {
   },
 
   execute(ctx: ActionContext, state: SimulatedState, out: UpdateInstruction[]): ExecuteResult {
-    const frog   = ctx.frog!;
-    const itemId = ctx.payload.itemId as string;
-    const item   = state.getItem(itemId)!;
+    const frog = ctx.frog!;
+    const item = state.getItemsAt(ctx.targetGridX!, ctx.targetGridY!)[0]!;
+    const itemId = item.itemId;
 
     state.updateItem(itemId, {
       itemState:         "INVENTORY",

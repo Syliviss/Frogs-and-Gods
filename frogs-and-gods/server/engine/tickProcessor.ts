@@ -15,6 +15,8 @@ import type { NotifyFn, ActionContext } from "../actions/_types";
 import type { GodActionContext } from "../actions/god_types";
 import type { PredatorActionContext } from "../actions/_predator_types";
 import { SimulatedState, type UpdateInstruction } from "./types";
+import { pushActionLog } from "./actionLog";
+import { CHUNK_SIZE } from "../utils/worldGenerator";
 
 export async function processAllActions(notify: NotifyFn = () => {}): Promise<void> {
   const db = await getDb();
@@ -97,6 +99,29 @@ export async function processAllActions(notify: NotifyFn = () => {}): Promise<vo
 
     const areaChunks = await getChunksInBoundingBox(minCX, maxCX, minCY, maxCY);
     for (const c of areaChunks) state.chunks.set(`${c.chunkX},${c.chunkY}`, c);
+  }
+
+  // Preload items referenced in god action payloads — they may be off-grid (e.g. VAULT state)
+  // and won't appear in the spatial getItemsInBounds query above.
+  const godPayloadItemIds: string[] = [];
+  for (const a of godActions) {
+    const p = a.payload as Record<string, unknown> | null;
+    if (typeof p?.itemId === "string") godPayloadItemIds.push(p.itemId);
+  }
+  if (godPayloadItemIds.length > 0) {
+    const godItems = await db.select().from(items).where(inArray(items.itemId, godPayloadItemIds));
+    for (const i of godItems) state.items.set(i.itemId, i);
+  }
+
+  // Preload predators referenced in god action payloads (e.g. KILL_PREDATOR targeting by ID).
+  const godPayloadPredatorIds: number[] = [];
+  for (const a of godActions) {
+    const p = a.payload as Record<string, unknown> | null;
+    if (typeof p?.predatorId === "number") godPayloadPredatorIds.push(p.predatorId);
+  }
+  if (godPayloadPredatorIds.length > 0) {
+    const godPredators = await db.select().from(predators).where(inArray(predators.id, godPayloadPredatorIds));
+    for (const p of godPredators) state.predators.set(p.id, p);
   }
 
   // 3. Predator AI Injection
@@ -196,7 +221,15 @@ export async function processAllActions(notify: NotifyFn = () => {}): Promise<vo
       if (!validation.ok) {
         if (validation.code === "FUMBLE") {
           updateQueue.push({ type: "ACTION_RESOLVE", id: action.id });
-          notify(frog.ownerId!, { type: "FUMBLE", message: validation.message ?? "Fumble!" });
+          const fumbleMsg = validation.message ?? `${frog.name} fumbled!`;
+          notify(frog.ownerId!, { type: "FUMBLE", message: fumbleMsg });
+          pushActionLog({
+            text:     fumbleMsg,
+            x:        frog.gridX,
+            y:        frog.gridY,
+            chunk_id: `${Math.floor(frog.gridX / CHUNK_SIZE)}:${Math.floor(frog.gridY / CHUNK_SIZE)}`,
+            category: "combat",
+          });
         } else {
           updateQueue.push({ type: "ACTION_CANCEL", id: action.id });
         }

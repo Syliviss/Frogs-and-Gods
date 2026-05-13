@@ -48,7 +48,9 @@ Navigational reference for the project. Every folder and notable file, one line 
 |------|---------|
 | `InventoryTab.tsx` | Admin item management — equip/unequip/give actions, inventory display per frog |
 | `EnemiesTab.tsx` | Admin predator panel — spawn/kill enemies, list active snakes |
+| `WorldInspectorTab.tsx` | World inspector — 315×315 biome coverage canvas, chunk terrain viewer, POI registry list |
 | `ImageDropZone.tsx` | Pixel art uploader — drag-and-drop 16×16 PNG → item pixel_data JSONB |
+| `ItemStatsForm.tsx` | Admin item stats editor form |
 
 #### `client/src/components/ui/`
 
@@ -85,7 +87,7 @@ Navigational reference for the project. Every folder and notable file, one line 
 
 | File | Purpose |
 |------|---------|
-| `Admin.tsx` | Dev console — tabbed UI: Users, Frogs, Gods, World, Items, Enemies, WorldLog, Engine |
+| `Admin.tsx` | Dev console — tabbed UI: Users, Frogs, Gods, World (WorldInspectorTab), Items, Enemies, WorldLog, Engine |
 | `GamePage.tsx` | Player-facing game view (functional but not yet live — see `THE_VOID_INVENTORY.md`) |
 | `FrogCreationForm.tsx` | Character creation — name, species, stat distribution |
 | `NotFound.tsx` | 404 page |
@@ -186,11 +188,25 @@ AI predator brains. Each file calculates intents and queues `pending_actions` �
 | `socket.ts` | WebSocket message handler — IDENTIFY, SUBMIT_ACTION, heartbeat listener wiring |
 | `worldLogEmitter.ts` | Singleton event emitter for WORLD_LOG broadcast events |
 
+### `server/worldgen/`
+
+Modular procedural generation pipeline. All logic moved here from the old `server/utils/worldGenerator.ts`.
+
+| File | Purpose |
+|------|---------|
+| `index.ts` | Public API — re-exports `generateChunk`, `MACRO_GRID`, `WORLD_SEED`, `POI_REGISTRY` etc. |
+| `generator.ts` | `generateChunk(cx, cy, seed, macroGrid)` — orchestrates all 4 layers, returns `{grid, biome}` |
+| `macroLayer.ts` | Wolfram ECA + radial mask; `buildMacroGrid()`, `isChunkSolid()`, pre-computed `MACRO_GRID` |
+| `biomeMap.ts` | `BiomeDef`, `BIOME_REGISTRY`, `getBiomeForChunk()` — Perlin-based biome assignment per chunk |
+| `tileResolver.ts` | `resolveTile()` — maps noise + biome thresholds → tile char; handles `%` lily pad scatter |
+| `poiRegistry.ts` | `POI_REGISTRY` array of `PoiDef` objects; `stampPois(cx, cy, grid)` — bake-time tile overrides |
+| `poiTypes.ts` | `PoiDef` interface and `PoiType` union type |
+
 ### `server/utils/`
 
 | File | Purpose |
 |------|---------|
-| `worldGenerator.ts` | Deterministic Perlin noise terrain — `generateChunk(chunkX, chunkY, WORLD_SEED)` |
+| `worldGenerator.ts` | Backward-compat shim — re-exports `CHUNK_SIZE`, `WORLD_SEED`, and a 3-arg `generateChunk` wrapper |
 
 ### `server/`
 
@@ -239,7 +255,7 @@ Standalone scripts. **Not included in `tsconfig.json`** — run with `npx tsx sc
 
 | File | Purpose |
 |------|---------|
-| `seedWorld.ts` | Idempotent 9×9 chunk world seeder (−4..4 on each axis). Seeds the starting area. |
+| `seedWorld.ts` | Full 315×315 chunk world seeder (−157..157, 99,225 chunks). Upserts in batches of 500. Supports `--dry-run`. |
 
 ---
 

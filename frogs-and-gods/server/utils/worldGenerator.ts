@@ -1,35 +1,12 @@
-import FastNoiseLite from "fastnoise-lite";
+// Backward-compat shim — all logic lives in server/worldgen/.
+// All existing imports of CHUNK_SIZE, WORLD_SEED, and generateChunk continue to work.
+import { generateChunk as _generate, MACRO_GRID } from "../worldgen/index";
 
-export const CHUNK_SIZE = 16;
-export const WORLD_SEED = 42;
+export { CHUNK_SIZE, WORLD_SEED } from "../worldgen/index";
 
-function tileChar(n: number, x: number, y: number): string {
-  if (n < 0.1) return "≈"; // Deep Lake
-  if (n < 0.3) return "+"; // Shore
-  if (n < 0.4) return "~"; // River
-  return (x + y) % 3 === 0 ? "@" : "#"; // Land / Lily Pad
-}
-
-export function generateChunk(
-  chunkX: number,
-  chunkY: number,
-  globalSeed: number
-): string[][] {
-  const noise = new FastNoiseLite(globalSeed);
-  noise.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
-  noise.SetFrequency(0.08);
-
-  const grid: string[][] = [];
-  for (let y = 0; y < CHUNK_SIZE; y++) {
-    const row: string[] = [];
-    for (let x = 0; x < CHUNK_SIZE; x++) {
-      const worldX = chunkX * CHUNK_SIZE + x;
-      const worldY = chunkY * CHUNK_SIZE + y;
-      const raw = noise.GetNoise(worldX, worldY); // -1..1
-      const normalized = (raw + 1) / 2;           // 0..1
-      row.push(tileChar(normalized, x, y));
-    }
-    grid.push(row);
-  }
-  return grid;
+// 3-arg legacy signature used by admin.ts spawnChunk and any other direct callers.
+// Delegates to the 4-arg pipeline using the pre-computed MACRO_GRID singleton.
+export function generateChunk(chunkX: number, chunkY: number, seed: number): string[][] {
+  const result = _generate(chunkX, chunkY, seed, MACRO_GRID);
+  return result.grid ?? [];
 }

@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { chebyshevDistance } from "../../../shared/movement";
 import type { TileDef } from "../../../shared/tileRegistry";
 import type { ActionSchema } from "../../../shared/game.schema";
@@ -9,23 +8,15 @@ export interface EquippedActionEntry {
   actionSchema?: ActionSchema | null;
 }
 
-export interface NearbyGroundItem {
-  itemId: string;
-  name:   string;
-  gridX:  number;
-  gridY:  number;
-}
-
 interface ActionBarProps {
   selectedTile:    { gridX: number; gridY: number } | null;
   playerFrog:      { gridX: number; gridY: number } | null;
   lockedIn:        boolean;
   equippedActions: EquippedActionEntry[];
-  nearbyItems?:    NearbyGroundItem[];
   targetingMode?:  boolean;
   onMove:          (actionType: "STEP" | "HOP") => void;
   onAction:        (actionName: string, itemId: string, actionSchema?: ActionSchema | null) => void;
-  onPickup?:       (itemId: string) => void;
+  onPickup?:       () => void;
   onCancelTarget?: () => void;
   error?:          string | null;
   tileDef?:        TileDef | null;
@@ -36,16 +27,14 @@ export function ActionBar({
   playerFrog,
   lockedIn,
   equippedActions,
-  nearbyItems = [],
   targetingMode,
   onMove,
   onAction,
-  onPickup = () => {},
+  onPickup  = () => {},
   onCancelTarget,
   error,
   tileDef,
 }: ActionBarProps) {
-  const [pickupOpen, setPickupOpen] = useState(false);
 
   const dist = playerFrog && selectedTile
     ? chebyshevDistance(playerFrog.gridX, playerFrog.gridY, selectedTile.gridX, selectedTile.gridY)
@@ -112,37 +101,22 @@ export function ActionBar({
           THROW <span className="text-gray-500 text-xs font-normal">(≤3)</span>
         </button>
 
-        {/* PICKUP dropdown */}
-        <div className="relative">
-          <button
-            onClick={() => nearbyItems.length > 0 && setPickupOpen(o => !o)}
-            disabled={nearbyItems.length === 0}
-            className={`px-5 py-2 border rounded text-sm font-bold font-serif transition ${
-              nearbyItems.length > 0
-                ? "border-green-700 hover:bg-green-900/40"
-                : "border-gray-700 text-gray-600 cursor-not-allowed"
-            }`}
-          >
-            PICKUP <span className="text-gray-500 text-xs font-normal">
-              {nearbyItems.length > 0 ? `(${nearbyItems.length})` : "(none)"}
-            </span>
-          </button>
-          {pickupOpen && nearbyItems.length > 0 && (
-            <div className="absolute bottom-full mb-1 left-0 z-10 bg-black border border-green-800 rounded shadow-lg min-w-max">
-              {nearbyItems.map(item => (
-                <button
-                  key={item.itemId}
-                  onClick={() => { onPickup(item.itemId); setPickupOpen(false); }}
-                  className="block w-full text-left px-4 py-2 text-sm font-serif text-green-300 hover:bg-green-900/40 transition"
-                >
-                  {item.name}
-                  <span className="text-gray-600 text-xs ml-2">({item.gridX},{item.gridY})</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <button
+          onClick={() => onPickup()}
+          className="px-5 py-2 border border-green-700 rounded text-sm font-bold font-serif hover:bg-green-900/40 transition"
+        >
+          PICKUP
+        </button>
       </div>
+
+      {/* Divider — only shown when item-granted actions are present */}
+      {equippedActions.length > 0 && (
+        <div className="flex items-center gap-2 w-full">
+          <div className="flex-1 h-px bg-gray-800" />
+          <span className="text-xs text-gray-600 uppercase tracking-widest">equipped</span>
+          <div className="flex-1 h-px bg-gray-800" />
+        </div>
+      )}
 
       {/* Item-granted actions — schema-driven; refreshed on each ENGINE_TICK */}
       {equippedActions.length > 0 && (

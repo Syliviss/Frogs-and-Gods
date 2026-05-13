@@ -6,7 +6,7 @@ import { heartbeat } from "../engine/heartbeat";
 import { processAllActions } from "../engine/tickProcessor";
 import { processEntityIntents } from "../entities/index";
 import { validateAndQueueMovement } from "../engine/movement";
-import { getFrogByOwnerId, createPendingAction, purgeResolvedActions, getDb } from "../db";
+import { getFrogByOwnerId, createPendingAction, purgeResolvedActions, purgeDeadFrogs, getDb } from "../db";
 import { flushActionLogs } from "../engine/actionLog";
 import { pendingActions, type InsertPendingAction } from "../../drizzle/schema";
 
@@ -105,6 +105,7 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
   heartbeat.on("broadcast", () => {
     broadcast({ type: "ENGINE_TICK", timestamp: Date.now() });
     void purgeResolvedActions();
+    void purgeDeadFrogs();
   });
 
   // ── Tick 0: entity AI queues intents for the new heartbeat cycle ──

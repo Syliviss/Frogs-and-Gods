@@ -156,7 +156,7 @@ export const SpawnChunkSchema = z.object({
 });
 export type SpawnChunkInput = z.infer<typeof SpawnChunkSchema>;
 
-export const TileCharSchema = z.enum(["≈", "+", "~", "@", "#"]);
+export const TileCharSchema = z.enum(["≈", "+", "~", "@", "#", "%"]);
 export type TileChar = z.infer<typeof TileCharSchema>;
 
 export const WorldMapChunkSchema = z.object({
