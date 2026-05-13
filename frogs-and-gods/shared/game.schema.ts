@@ -322,6 +322,11 @@ export const GiveActionSchema = z.object({
 });
 export type GiveActionInput = z.infer<typeof GiveActionSchema>;
 
+export const PickupActionSchema = z.object({
+  itemId: z.string().min(1).max(36),
+});
+export type PickupActionInput = z.infer<typeof PickupActionSchema>;
+
 // ─────────────────────────────────────────────
 // PENDING ACTION (heartbeat queue input)
 // ─────────────────────────────────────────────

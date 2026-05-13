@@ -40,12 +40,21 @@ export default function GamePage() {
     { enabled: !!selectedFrogId },
   );
 
+  const nearbyItemsQuery = trpc.frog.getNearbyGroundItems.useQuery(
+    { frogId: selectedFrogId! },
+    { enabled: !!selectedFrogId },
+  );
+
   const inventoryQuery = trpc.admin.getInventoryForFrog.useQuery(
     { frogId: selectedFrogId! },
     { enabled: !!selectedFrogId },
   );
 
   const submitMovement = trpc.admin.submitMovementForFrog.useMutation({
+    onSuccess: () => setLockedIn(true),
+  });
+
+  const submitAction = trpc.admin.submitActionForFrog.useMutation({
     onSuccess: () => setLockedIn(true),
   });
 
@@ -91,6 +100,7 @@ export default function GamePage() {
     });
     void frogsQuery.refetch();
     void equippedActionsQuery.refetch();
+    void nearbyItemsQuery.refetch();
     void inventoryQuery.refetch();
     setLockedIn(false);
   });
@@ -138,6 +148,11 @@ export default function GamePage() {
       // Legacy stub for simple (non-schema) actions
       setLockedIn(true);
     }
+  };
+
+  const handlePickup = (itemId: string) => {
+    if (!selectedFrogId) return;
+    submitAction.mutate({ frogId: selectedFrogId, actionType: "PICKUP", payload: { itemId } });
   };
 
   if (!selectedFrogId) {
@@ -202,11 +217,13 @@ export default function GamePage() {
         playerFrog={frogPos ?? playerFrog}
         lockedIn={lockedIn}
         equippedActions={equippedActionsQuery.data ?? []}
+        nearbyItems={nearbyItemsQuery.data ?? []}
         targetingMode={intentBuilder.mode === "TARGETING"}
         onMove={handleMove}
         onAction={handleAction}
+        onPickup={handlePickup}
         onCancelTarget={intentBuilder.cancel}
-        error={submitMovement.error?.message ?? intentBuilder.error}
+        error={submitMovement.error?.message ?? submitAction.error?.message ?? intentBuilder.error}
         tileDef={tileDef}
       />
     </div>

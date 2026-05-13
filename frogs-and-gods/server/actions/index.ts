@@ -9,6 +9,7 @@ import { throwHandler } from "./throw";
 import { storeHandler } from "./store";
 import { giveHandler } from "./give";
 import { swingHandler } from "./swing";
+import { pickupHandler } from "./pickup";
 import { createItemHandler } from "./create_item";
 import { spawnItemHandler } from "./spawn_item";
 import { spawnPredatorHandler } from "./spawn";
@@ -36,6 +37,7 @@ const ACTION_REGISTRY: Record<string, ActionHandler> = {
   STORE_ITEM: storeHandler,
   GIVE:       giveHandler,
   SWING:      swingHandler,
+  PICKUP:     pickupHandler,
 };
 
 export const GOD_ACTION_REGISTRY: Record<string, GodActionHandler> = {

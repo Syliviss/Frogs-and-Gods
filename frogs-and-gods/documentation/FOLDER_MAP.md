@@ -38,7 +38,7 @@ Navigational reference for the project. Every folder and notable file, one line 
 | File | Purpose |
 |------|---------|
 | `Viewport.tsx` | HTML5 Canvas isometric renderer — 3×3 chunk view, click detection, sprite overlay |
-| `ActionBar.tsx` | Action button row — STEP/HOP/item actions, TARGETING mode UI for SWING |
+| `ActionBar.tsx` | Action button row — STEP/HOP/PICKUP dropdown/item-granted actions, TARGETING mode UI for SWING |
 | `ActionLog.tsx` | Scrolling feed of resolved action events |
 | `ErrorBoundary.tsx` | React error boundary for crash isolation |
 
@@ -138,6 +138,7 @@ Every action handler lives here. The central registry is `index.ts`.
 | `store.ts` | STORE_ITEM — place item inside container |
 | `throw.ts` | THROW — throw item to ground (range 3) |
 | `swing.ts` | SWING — multi-tile melee AoE via Generic Intent Builder |
+| `pickup.ts` | PICKUP — pick up a GROUND item into inventory (Chebyshev 1 range) |
 | `create_item.ts` | CREATE_ITEM — god action: create item in VOID state |
 | `spawn_item.ts` | SPAWN_ITEM — god action: place item at world coords |
 | `spawn.ts` | SPAWN_PREDATOR — god action: insert predator row |

@@ -21,6 +21,7 @@ import { useActionLogs } from "@/hooks/useActionLogs";
 import { InventoryTab } from "@/components/admin/InventoryTab";
 import { EnemiesTab } from "@/components/admin/EnemiesTab";
 import { ImageDropZone } from "@/components/admin/ImageDropZone";
+import { ItemStatsForm } from "@/components/admin/ItemStatsForm";
 import { spriteManager } from "@/lib/SpriteManager";
 
 // ─────────────────────────────────────────────
@@ -626,13 +627,7 @@ function ItemsTab() {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
           <div>
-            <p style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>Stats JSON</p>
-            <textarea
-              value={createStatsStr}
-              onChange={(e) => setCreateStatsStr(e.target.value)}
-              rows={4}
-              style={{ width: "100%", background: "#060d18", border: "1px solid #1e2a3a", borderRadius: 4, padding: "6px 8px", color: "#e2e8f0", fontSize: 11, fontFamily: "monospace", resize: "vertical", boxSizing: "border-box" }}
-            />
+            <ItemStatsForm value={createStatsStr} onChange={setCreateStatsStr} />
           </div>
           <div>
             <p style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>Pixel Data (256 hex values — optional)</p>

@@ -21,6 +21,7 @@ import {
   createPartyInvite,
   getChunksByCoords,
   getEquippedItemsByFrogId,
+  getGroundItemsNear,
   getFrogById,
   getFrogByOwnerId,
   getFrogsByPartyId,
@@ -181,6 +182,15 @@ export const appRouter = router({
             actionSchema: item.statsJson.actionSchema ?? null,
           })),
         );
+      }),
+
+    getNearbyGroundItems: publicProcedure
+      .input(z.object({ frogId: z.number().int().positive() }))
+      .query(async ({ input }) => {
+        const frog = await getFrogById(input.frogId);
+        if (!frog) return [];
+        const nearby = await getGroundItemsNear(frog.gridX, frog.gridY, 1);
+        return nearby.map(i => ({ itemId: i.itemId, name: i.name, gridX: i.gridX!, gridY: i.gridY! }));
       }),
   }),
 

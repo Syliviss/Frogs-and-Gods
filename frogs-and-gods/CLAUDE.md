@@ -121,3 +121,26 @@ The Admin panel (`client/src/pages/Admin.tsx`) is the primary dev UI. It has tab
 ### Scripts
 
 `scripts/` is **not** included in `tsconfig.json`. `pnpm check` / `yarn check` will not type-check files there. Run them directly with `npx tsx scripts/<file>.ts`. Currently: `scripts/seedWorld.ts` seeds a 9×9 chunk grid (−4..4 on each axis) idempotently.
+
+## Documentation Review (Required After Any Feature Implementation)
+
+After implementing any new action, route, DB helper, or frontend component, read every project doc and update each that's affected. Do not skip docs that "probably don't apply" — scan them all.
+
+**Project docs to check (in order):**
+
+| File | What it tracks | Update when… |
+|------|---------------|--------------|
+| `documentation/ACTIONS_DICTIONARY.md` | Every action handler | Any new or changed frog/predator/god action |
+| `documentation/ACTION_PATH.md` | Full action lifecycle, tRPC entry points, WS notifications | New tRPC mutation used, new WS broadcast type added |
+| `documentation/FOLDER_MAP.md` | Every file in the project, one-line purpose | New file created anywhere in `server/`, `client/`, `shared/`, or `drizzle/` |
+| `documentation/ENTITIES_DICTIONARY.md` | Predator AI system, entity types, condition system | New predator action, new condition, new entity type |
+| `documentation/THE_VOID_INVENTORY.md` | Ghost code, unimplemented planned features, architectural debts | Feature moved from planned → implemented (remove it from the list); new architectural debt introduced |
+| `documentation/SWING_WEAPON_SCHEMA.md` | Item `statsJson` JSONB shape for equipment | Changes to `ItemStats`, `ActionSchemaSchema`, or the equip/bonus recalc pipeline |
+| `DIVINE_ASCII_ARCHITECTURE.md` | Canvas rendering data path, WebSocket message types, vision query | Changes to Viewport passes, vision query shape, WS message set, or SpriteManager |
+| `PROCEDURAL_GENERATION.md` | Terrain generation pipeline, tile types | Changes to tile chars, `worldGenerator.ts`, or chunk seeding |
+
+**Checklist for each new frog action specifically:**
+- [ ] `ACTIONS_DICTIONARY.md` — add handler table entry (file, type, distance, key rules, fumble triggers)
+- [ ] `ACTION_PATH.md` — add WS notification type if `broadcast()` emits a new one; update tRPC entry point list if a new mutation is used
+- [ ] `FOLDER_MAP.md` — add row for the new `server/actions/<action>.ts` file; update any component descriptions that gained new props
+- [ ] `THE_VOID_INVENTORY.md` — remove from "Planned but Unimplemented Actions" if it was listed there

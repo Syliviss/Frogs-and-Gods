@@ -242,6 +242,17 @@ Factory function that returns a complete `ActionHandler` for a movement action t
 | **Key rules** | Item must be EQUIPPED or in inventory. Target tile must be within range. Sets item state to `GROUND` at target coords. |
 | **Fumble triggers** | Item's `blockedActions` includes `"THROW"`. |
 
+### PICKUP
+
+| | |
+|--|--|
+| **File** | `server/actions/pickup.ts` |
+| **Type** | item |
+| **Distance** | Chebyshev 1 (own tile + 8 adjacent) |
+| **Key rules** | Item must be `GROUND` within Chebyshev ≤ 1 of frog. Payload must include `itemId`. Sets item state to `INVENTORY`, assigns `ownerId = frog.id`. No bonus recalculation (unlike EQUIP). Universal — no equipment required. |
+| **Fumble triggers** | Inventory capacity exceeded (`inventoryCapacity` slots full, default 6). Item's `blockedActions` includes `"PICKUP"`. |
+| **UI** | "PICKUP (N)" dropdown button in ActionBar; populated by `frog.getNearbyGroundItems` query, refreshed on ENGINE_TICK. |
+
 ### SWING
 
 | | |

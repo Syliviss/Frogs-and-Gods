@@ -431,6 +431,18 @@ export async function getItemsInBounds(
   ));
 }
 
+export async function getGroundItemsNear(gridX: number, gridY: number, range: number): Promise<Item[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(items).where(and(
+    eq(items.itemState, "GROUND"),
+    isNotNull(items.gridX),
+    isNotNull(items.gridY),
+    gte(items.gridX, gridX - range), lte(items.gridX, gridX + range),
+    gte(items.gridY, gridY - range), lte(items.gridY, gridY + range),
+  ));
+}
+
 export async function getItemById(itemId: string): Promise<Item | null> {
   const db = await getDb();
   if (!db) return null;

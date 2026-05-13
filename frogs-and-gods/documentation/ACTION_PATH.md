@@ -24,9 +24,9 @@ Both paths converge at `createPendingAction()` in `server/db.ts`. After insertio
 **File:** `server/routers/admin.ts`
 
 #### `admin.submitActionForFrog` — frog item actions
-Used by `InventoryTab.tsx` for EQUIP, UNEQUIP, GIVE.
+Used by `InventoryTab.tsx` for EQUIP, UNEQUIP, GIVE. Also used by `GamePage.tsx` for PICKUP.
 ```
-InventoryTab.tsx
+InventoryTab.tsx / GamePage.tsx
   └─ trpc.admin.submitActionForFrog.mutate({ frogId, actionType, payload })
        └─ createPendingAction({ actorId: frogId, actionType, resolveBucket, payload })
        └─ returns { queued: true, pendingActionId }
@@ -290,10 +290,11 @@ swingHandler.broadcast():
 ### Immediate — targeted WebSocket message
 Each handler's `broadcast()` phase calls `notify(userId, data)`:
 ```
-{ type: "ITEM_EQUIPPED", itemId }
+{ type: "ITEM_EQUIPPED",   itemId }
+{ type: "ITEM_PICKED_UP",  itemId, frogId }
 { type: "ACTION_RESOLVED", gridX, gridY }
-{ type: "FUMBLE", message }
-{ type: "SWING_RESOLVED", targetTiles, damaged }
+{ type: "FUMBLE",          message }
+{ type: "SWING_RESOLVED",  targetTiles, damaged }
 ```
 Delivered immediately when the action resolves, before the next ENGINE_TICK.
 
