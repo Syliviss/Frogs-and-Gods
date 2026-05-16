@@ -3,6 +3,7 @@ import { z } from "zod";
 import { publicProcedure, router } from "../_core/trpc";
 import {
   createFrog,
+  createInstance,
   createPendingAction,
   createUserWithOpenId,
   createWorldMapChunk,
@@ -10,10 +11,17 @@ import {
   getChunksByCoords,
   getEquippedItemsByFrogId,
   getFrogById,
+  getFrogsInBounds,
   getGodById,
+  getInstanceById,
+  getInstancesByOwnerGodId,
   getInventoryItemsByFrogId,
   getItemById,
   getItemStats,
+  getItemsInBounds,
+  getLairEntrancesByOwnerGodId,
+  getOverridesByChunks,
+  getPredatorsInChunkArea,
   getWorldChunkStats,
   hasPendingActionForFrog,
   listAllFrogs,
@@ -23,22 +31,29 @@ import {
   listRecentPredators,
   listWorldMapChunks,
   setUserRole,
+  stageInstanceTileData,
   updateFrog,
   updateGod,
 } from "../db";
 import { POI_REGISTRY } from "../worldgen/index";
+import { generateFrogPixelData } from "../assets/frogModels";
 import type { FrogStats } from "../../drizzle/schema";
 import { xpToNextLevel } from "../engine/xpDistributor";
 import {
   ActionSchemaSchema,
   CreateFrogSchema,
+  CreateGodPayloadSchema,
   CreateItemPayloadSchema,
   GetChunksByCoordsSchema,
+  GetGodVisionSchema,
+  GetMapStudioChunksSchema,
+  GodPanSchema,
   KillPredatorPayloadSchema,
   MoveTypeSchema,
   SpawnChunkSchema,
   SpawnItemPayloadSchema,
   SpawnPredatorPayloadSchema,
+  SubmitDivineActionSchema,
   type FrogSpecies,
 } from "../../shared/game.schema";
 import { validateAndQueueMovement } from "../engine/movement";
@@ -113,6 +128,7 @@ export const adminRouter = router({
         statsJson:   finalStats,
         currentHp:   finalStats.maxHp,
         currentMana: finalStats.maxMana,
+        modelJson:   generateFrogPixelData(input.species),
       });
       return { success: true, openId };
     }),
@@ -165,7 +181,19 @@ export const adminRouter = router({
     return listAllGods();
   }),
 
-  setDivinePower: publicProcedure
+  createGod: publicProcedure
+    .input(CreateGodPayloadSchema)
+    .mutation(async ({ input }) => {
+      const action = await createPendingAction({
+        actorId:       0,
+        actionType:    "CREATE_GOD",
+        resolveBucket: Math.floor(Date.now() / 500),
+        payload:       input,
+      });
+      return { queued: true, pendingActionId: action.id };
+    }),
+
+  setFavor: publicProcedure
     .input(z.object({
       godId:  z.number().int().positive(),
       amount: z.number().int().min(0).max(10_000),
@@ -173,8 +201,140 @@ export const adminRouter = router({
     .mutation(async ({ input }) => {
       const god = await getGodById(input.godId);
       if (!god) throw new TRPCError({ code: "NOT_FOUND", message: "God not found." });
-      await updateGod(god.id, { divinePower: input.amount });
+      await updateGod(god.id, { favor: input.amount });
       return { success: true };
+    }),
+
+  getGodVision: publicProcedure
+    .input(GetGodVisionSchema)
+    .query(async ({ input }) => {
+      const { centerChunkX: ccx, centerChunkY: ccy } = input;
+      const coords: { chunkX: number; chunkY: number }[] = [];
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++)
+          coords.push({ chunkX: ccx + dx, chunkY: ccy + dy });
+      const minGX = (ccx - 1) * 16;
+      const maxGX = (ccx + 2) * 16 - 1;
+      const minGY = (ccy - 1) * 16;
+      const maxGY = (ccy + 2) * 16 - 1;
+      const [chunkRows, frogRows, predRows, itemRows, overrides] = await Promise.all([
+        getChunksByCoords(coords),
+        getFrogsInBounds(minGX, maxGX, minGY, maxGY),
+        getPredatorsInChunkArea(coords),
+        getItemsInBounds(minGX, maxGX, minGY, maxGY),
+        getOverridesByChunks(coords),
+      ]);
+      const chunks: Record<string, string[][]> = {};
+      for (const c of chunkRows) {
+        if (c.terrainDataJson)
+          chunks[`${c.chunkX}:${c.chunkY}`] = JSON.parse(c.terrainDataJson) as string[][];
+      }
+      for (const ov of overrides) {
+        const grid = chunks[`${ov.chunkX}:${ov.chunkY}`];
+        if (grid) {
+          const localX = ov.gridX - ov.chunkX * 16;
+          const localY = ov.gridY - ov.chunkY * 16;
+          if (grid[localY]) grid[localY][localX] = ov.newChar;
+        }
+      }
+      const groundItems = itemRows.map(({ pixelData: _px, ...rest }) => rest);
+      return { chunks, frogs: frogRows, predators: predRows, items: groundItems };
+    }),
+
+  getMapStudioChunks: publicProcedure
+    .input(GetMapStudioChunksSchema)
+    .query(async ({ input }) => {
+      const { centerChunkX: ccx, centerChunkY: ccy, radius } = input;
+      const coords: { chunkX: number; chunkY: number }[] = [];
+      for (let dy = -radius; dy <= radius; dy++)
+        for (let dx = -radius; dx <= radius; dx++)
+          coords.push({ chunkX: ccx + dx, chunkY: ccy + dy });
+      const minGX = (ccx - radius) * 16;
+      const maxGX = (ccx + radius + 1) * 16 - 1;
+      const minGY = (ccy - radius) * 16;
+      const maxGY = (ccy + radius + 1) * 16 - 1;
+      const [chunkRows, frogRows, predRows, itemRows, overrides] = await Promise.all([
+        getChunksByCoords(coords),
+        getFrogsInBounds(minGX, maxGX, minGY, maxGY),
+        getPredatorsInChunkArea(coords),
+        getItemsInBounds(minGX, maxGX, minGY, maxGY),
+        getOverridesByChunks(coords),
+      ]);
+      const chunks: Record<string, string[][]> = {};
+      for (const c of chunkRows) {
+        if (c.terrainDataJson)
+          chunks[`${c.chunkX}:${c.chunkY}`] = JSON.parse(c.terrainDataJson) as string[][];
+      }
+      for (const ov of overrides) {
+        const grid = chunks[`${ov.chunkX}:${ov.chunkY}`];
+        if (grid) {
+          const localX = ov.gridX - ov.chunkX * 16;
+          const localY = ov.gridY - ov.chunkY * 16;
+          if (grid[localY]) grid[localY][localX] = ov.newChar;
+        }
+      }
+      const groundItems = itemRows.map(({ pixelData: _px, ...rest }) => rest);
+      return { chunks, frogs: frogRows, predators: predRows, items: groundItems };
+    }),
+
+  submitDivineAction: publicProcedure
+    .input(SubmitDivineActionSchema)
+    .mutation(async ({ input }) => {
+      const god = await getGodById(input.godId);
+      if (!god) throw new TRPCError({ code: "NOT_FOUND", message: "God not found." });
+      if (god.favor < 25) throw new TRPCError({ code: "BAD_REQUEST", message: `Insufficient favor (need 25, have ${god.favor}).` });
+
+      const ACTION_TYPE_MAP: Record<string, string> = {
+        HEAL_FROG:       "DIV_HEAL_FROG",
+        SMITE_ENEMY:     "DIV_SMITE_ENEMY",
+        SPAWN_ITEM:      "DIV_SPAWN_ITEM",
+        SPAWN_PREDATOR:  "DIV_SPAWN_PREDATOR",
+      };
+      const actionType = ACTION_TYPE_MAP[input.powerId]!;
+
+      const payload: Record<string, unknown> = {
+        godId:           input.godId,
+        targetFrogId:    input.targetFrogId,
+        targetPredatorId: input.targetPredatorId,
+        // SPAWN_ITEM: use itemId/targetX/targetY to match SpawnItemPayloadSchema field names
+        itemId:   input.spawnItemTemplateId,
+        targetX:  input.targetGridX,
+        targetY:  input.targetGridY,
+        // SPAWN_PREDATOR: use field names matching SpawnPredatorPayloadSchema
+        gridX:     input.targetGridX,
+        gridY:     input.targetGridY,
+        enemyType: input.spawnEnemyType,
+        aiType:    input.spawnEnemyAiType,
+        hp:        input.spawnEnemyHp ?? 20,
+        speed:     input.spawnEnemySpeed ?? 5,
+        // raw target for broadcast logging
+        targetGridX: input.targetGridX,
+        targetGridY: input.targetGridY,
+      };
+
+      const action = await createPendingAction({
+        actorId:       input.godId,
+        actionType,
+        resolveBucket: Math.floor(Date.now() / 500),
+        targetGridX:   input.targetGridX,
+        targetGridY:   input.targetGridY,
+        payload,
+      });
+      return { queued: true, pendingActionId: action.id };
+    }),
+
+  submitGodPan: publicProcedure
+    .input(GodPanSchema)
+    .mutation(async ({ input }) => {
+      const god = await getGodById(input.godId);
+      if (!god) throw new TRPCError({ code: "NOT_FOUND", message: "God not found." });
+      const action = await createPendingAction({
+        actorId:       input.godId,
+        actionType:    "GOD_PAN",
+        resolveBucket: Math.floor(Date.now() / 500),
+        payload:       { godId: input.godId, chunkX: input.chunkX, chunkY: input.chunkY },
+      });
+      return { queued: true, pendingActionId: action.id };
     }),
 
   // ── WORLD MAP CHUNKS & ITEMS ──────────────
@@ -438,6 +598,101 @@ export const adminRouter = router({
         pendingActionId: action.id,
         resolvesInMs:   schema.cast_time_ms,
       };
+    }),
+
+  // ── GOD'S LAIR ────────────────────────────
+
+  getLairsByGod: publicProcedure
+    .input(z.object({ godId: z.number().int().positive() }))
+    .query(async ({ input }) => {
+      return getInstancesByOwnerGodId(input.godId);
+    }),
+
+  getLairEntranceCountForGod: publicProcedure
+    .input(z.object({ godId: z.number().int().positive() }))
+    .query(async ({ input }) => {
+      const entrances = await getLairEntrancesByOwnerGodId(input.godId);
+      return { count: entrances.length };
+    }),
+
+  stageLairTileData: publicProcedure
+    .input(z.object({
+      godId:        z.number().int().positive(),
+      instanceId:   z.number().int().positive().optional(),
+      tileDataJson: z.array(z.array(z.string()).length(16)).length(16),
+    }).refine(
+      (d) => d.tileDataJson.flat().filter(c => c === "D").length === 1,
+      { message: "Tile layout must contain exactly one 'D' tile." }
+    ))
+    .mutation(async ({ input }) => {
+      const god = await getGodById(input.godId);
+      if (!god) throw new TRPCError({ code: "NOT_FOUND", message: "God not found." });
+
+      const serialized = JSON.stringify(input.tileDataJson);
+
+      let resolvedInstanceId: number;
+
+      if (!input.instanceId) {
+        const newInstance = await createInstance({
+          ownerGodId:         input.godId,
+          stagedTileDataJson: serialized,
+        });
+        resolvedInstanceId = newInstance.id;
+      } else {
+        const existing = await getInstanceById(input.instanceId);
+        if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Instance not found." });
+        if (existing.ownerGodId !== input.godId) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Instance does not belong to this god." });
+        }
+        await stageInstanceTileData(input.instanceId, serialized);
+        resolvedInstanceId = input.instanceId;
+      }
+
+      const action = await createPendingAction({
+        actorId:       input.godId,
+        actionType:    "DIV_UPDATE_LAIR",
+        resolveBucket: Math.floor(Date.now() / 500),
+        payload:       { godId: input.godId, instanceId: resolvedInstanceId },
+      });
+
+      return { instanceId: resolvedInstanceId, pendingActionId: action.id };
+    }),
+
+  submitDivPlaceLair: publicProcedure
+    .input(z.object({
+      godId:       z.number().int().positive(),
+      instanceId:  z.number().int().positive(),
+      targetGridX: z.number().int(),
+      targetGridY: z.number().int(),
+    }))
+    .mutation(async ({ input }) => {
+      const god = await getGodById(input.godId);
+      if (!god) throw new TRPCError({ code: "NOT_FOUND", message: "God not found." });
+
+      const instance = await getInstanceById(input.instanceId);
+      if (!instance) throw new TRPCError({ code: "NOT_FOUND", message: "Instance not found." });
+      if (instance.ownerGodId !== input.godId) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Instance does not belong to this god." });
+      }
+      if (!instance.tileDataJson) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Instance layout must be committed before placing an entrance." });
+      }
+
+      const action = await createPendingAction({
+        actorId:       input.godId,
+        actionType:    "DIV_PLACE_LAIR",
+        targetGridX:   input.targetGridX,
+        targetGridY:   input.targetGridY,
+        resolveBucket: Math.floor(Date.now() / 500),
+        payload:       {
+          godId:       input.godId,
+          instanceId:  input.instanceId,
+          targetGridX: input.targetGridX,
+          targetGridY: input.targetGridY,
+        },
+      });
+
+      return { queued: true, pendingActionId: action.id };
     }),
 
 });

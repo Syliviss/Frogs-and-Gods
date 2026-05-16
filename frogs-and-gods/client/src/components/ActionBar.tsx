@@ -17,6 +17,7 @@ interface ActionBarProps {
   onMove:          (actionType: "STEP" | "HOP") => void;
   onAction:        (actionName: string, itemId: string, actionSchema?: ActionSchema | null) => void;
   onPickup?:       () => void;
+  onOpenDoor?:     () => void;
   onCancelTarget?: () => void;
   error?:          string | null;
   tileDef?:        TileDef | null;
@@ -31,6 +32,7 @@ export function ActionBar({
   onMove,
   onAction,
   onPickup  = () => {},
+  onOpenDoor,
   onCancelTarget,
   error,
   tileDef,
@@ -107,6 +109,14 @@ export function ActionBar({
         >
           PICKUP
         </button>
+        {onOpenDoor && (
+          <button
+            onClick={onOpenDoor}
+            className="px-5 py-2 border border-purple-700 rounded text-sm font-bold font-serif hover:bg-purple-900/40 transition"
+          >
+            OPEN DOOR
+          </button>
+        )}
       </div>
 
       {/* Divider — only shown when item-granted actions are present */}

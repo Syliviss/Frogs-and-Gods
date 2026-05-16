@@ -18,7 +18,6 @@ import {
 // ─────────────────────────────────────────────
 
 export const roleEnum         = pgEnum("role",           ["frog", "god", "admin"]);
-export const inviteStatusEnum = pgEnum("invite_status",  ["pending", "accepted", "declined"]);
 export const itemStateEnum    = pgEnum("item_state",     ["VOID", "GROUND", "INVENTORY", "EQUIPPED", "ITEM", "GOD"]);
 export const itemTypeEnum     = pgEnum("item_type",      ["STANDARD", "CONTAINER"]);
 export const actionStatusEnum = pgEnum("action_status",  ["pending", "resolved", "cancelled"]);
@@ -98,12 +97,20 @@ export const frogs = pgTable("frogs", {
   /** Absolute tile Y position in the world grid */
   gridY:            integer("grid_y").default(0).notNull(),
   isDead:           boolean("is_dead").default(false).notNull(),
-  partyId:          integer("partyId"),
   /** Flexible stats: maxHp, maxMana, str, dex, wis, int, cha */
   statsJson:        jsonb("stats_json").$type<FrogStats>().notNull(),
+  /** 16×16 pixel art sprite — 256-element array of hex colors or null (transparent).
+   *  Generated at creation from server/assets/frogModels.ts palette + template. */
+  modelJson:        jsonb("model_json").$type<(string | null)[]>(),
+  /** Null = overworld; N = inside instance with that id */
+  instanceId:       integer("instance_id"),
   createdAt:        timestamp("createdAt").defaultNow().notNull(),
   updatedAt:        timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
-});
+}, (table) => [
+  index("idx_frogs_owner").on(table.ownerId),
+  index("idx_frogs_grid").on(table.gridX, table.gridY),
+  index("idx_frogs_instance").on(table.instanceId),
+]);
 
 export type Frog       = typeof frogs.$inferSelect;
 export type InsertFrog = typeof frogs.$inferInsert;
@@ -112,52 +119,66 @@ export type InsertFrog = typeof frogs.$inferInsert;
 // GODS  (divine watcher players)
 // ─────────────────────────────────────────────
 
+// ─────────────────────────────────────────────
+// INSTANCES  (God-owned 16×16 dungeon layouts)
+// ─────────────────────────────────────────────
+
+export const instances = pgTable("instances", {
+  id:                  serial("id").primaryKey(),
+  ownerGodId:          integer("owner_god_id").notNull(),
+  /** Committed 16×16 ASCII layout (null = not yet finalized) */
+  tileDataJson:        text("tile_data_json"),
+  /** Pre-staged layout awaiting DIV_UPDATE_LAIR resolution */
+  stagedTileDataJson:  text("staged_tile_data_json"),
+  createdAt:           timestamp("createdAt").defaultNow().notNull(),
+  updatedAt:           timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+}, (table) => [
+  index("idx_instances_owner").on(table.ownerGodId),
+]);
+
+export type Instance       = typeof instances.$inferSelect;
+export type InsertInstance = typeof instances.$inferInsert;
+
+// ─────────────────────────────────────────────
+// LAIR ENTRANCES  (overworld tiles that lead into an instance)
+// ─────────────────────────────────────────────
+
+export const lairEntrances = pgTable("lair_entrances", {
+  id:         serial("id").primaryKey(),
+  instanceId: integer("instance_id").notNull(),
+  /** Absolute overworld tile X */
+  gridX:      integer("grid_x").notNull(),
+  /** Absolute overworld tile Y */
+  gridY:      integer("grid_y").notNull(),
+  createdAt:  timestamp("createdAt").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("unique_entrance_pos").on(table.gridX, table.gridY),
+  index("idx_lair_entrances_instance").on(table.instanceId),
+]);
+
+export type LairEntrance       = typeof lairEntrances.$inferSelect;
+export type InsertLairEntrance = typeof lairEntrances.$inferInsert;
+
+// ─────────────────────────────────────────────
+// GODS  (divine watcher players)
+// ─────────────────────────────────────────────
+
 export const gods = pgTable("gods", {
   id:                 serial("id").primaryKey(),
-  userId:             integer("userId").notNull().unique(),
+  /** Null for admin-created system gods; set when a player registers as a god */
+  userId:             integer("userId").unique(),
   name:               varchar("name", { length: 64 }).notNull(),
   /** Currency spent on interventions */
-  divinePower:        integer("divine_power").default(100).notNull(),
+  favor:              integer("favor").default(100).notNull(),
   totalInterventions: integer("total_interventions").default(0).notNull(),
+  /** 3 divine power IDs chosen at creation (e.g. ["HEAL_FROG", "SMITE_ENEMY", "SPAWN_ITEM"]) */
+  startingPowers:     jsonb("starting_powers").$type<string[]>().default([]).notNull(),
   createdAt:          timestamp("createdAt").defaultNow().notNull(),
   updatedAt:          timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 });
 
 export type God       = typeof gods.$inferSelect;
 export type InsertGod = typeof gods.$inferInsert;
-
-// ─────────────────────────────────────────────
-// PARTIES  (social groupings of Frogs)
-// ─────────────────────────────────────────────
-
-export const parties = pgTable("parties", {
-  id:        serial("id").primaryKey(),
-  name:      varchar("name", { length: 64 }).notNull(),
-  leaderId:  integer("leaderId").notNull(),
-  maxSize:   integer("max_size").default(4).notNull(),
-  isActive:  boolean("is_active").default(true).notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
-});
-
-export type Party       = typeof parties.$inferSelect;
-export type InsertParty = typeof parties.$inferInsert;
-
-// ─────────────────────────────────────────────
-// PARTY INVITES
-// ─────────────────────────────────────────────
-
-export const partyInvites = pgTable("party_invites", {
-  id:              serial("id").primaryKey(),
-  partyId:         integer("partyId").notNull(),
-  invitedFrogId:   integer("invitedFrogId").notNull(),
-  invitedByFrogId: integer("invitedByFrogId").notNull(),
-  status:          inviteStatusEnum("status").default("pending").notNull(),
-  createdAt:       timestamp("createdAt").defaultNow().notNull(),
-});
-
-export type PartyInvite       = typeof partyInvites.$inferSelect;
-export type InsertPartyInvite = typeof partyInvites.$inferInsert;
 
 // ─────────────────────────────────────────────
 // ITEMS  (vault — 1-of-1 economy)
@@ -214,9 +235,15 @@ export const items = pgTable("items", {
   remainingTicks:    integer("remaining_ticks").default(0).notNull(),
   /** 16×16 pixel art sprite — 256-element array of hex colors or null (transparent) */
   pixelData:         jsonb("pixel_data").$type<(string | null)[]>(),
+  /** Null = overworld; N = inside instance with that id */
+  instanceId:        integer("instance_id"),
   createdAt:         timestamp("createdAt").defaultNow().notNull(),
   updatedAt:         timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
-});
+}, (table) => [
+  index("idx_items_owner_state").on(table.ownerId, table.itemState),
+  index("idx_items_grid").on(table.gridX, table.gridY),
+  index("idx_items_instance").on(table.instanceId),
+]);
 
 export type Item       = typeof items.$inferSelect;
 export type InsertItem = typeof items.$inferInsert;
@@ -246,6 +273,7 @@ export const pendingActions = pgTable("pending_actions", {
 }, (table) => [
   index("resolve_status_idx").on(table.resolveBucket, table.status),
   index("status_resolved_at_idx").on(table.status, table.resolvedAt),
+  index("idx_pending_actor_status").on(table.actorId, table.status),
 ]);
 
 export type PendingAction       = typeof pendingActions.$inferSelect;
@@ -325,10 +353,13 @@ export const predators = pgTable("predators", {
   lastMealTick: integer("last_meal_tick").default(0).notNull(),
   /** Flexible AI state, mutations, path data */
   statsJson:    jsonb("stats_json").$type<PredatorStats>(),
+  /** Null = overworld; N = inside instance with that id */
+  instanceId:   integer("instance_id"),
   createdAt:    timestamp("createdAt").defaultNow().notNull(),
   updatedAt:    timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
 }, (table) => [
   index("chunk_predator_idx").on(table.chunkX, table.chunkY),
+  index("idx_predators_instance").on(table.instanceId),
 ]);
 
 export type Predator       = typeof predators.$inferSelect;
@@ -350,7 +381,9 @@ export const worldLogEvents = pgTable("world_log_events", {
   chunkX:    integer("chunk_x"),
   chunkY:    integer("chunk_y"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, (table) => [
+  index("idx_worldlog_created_at").on(table.createdAt),
+]);
 
 export type WorldLogEvent       = typeof worldLogEvents.$inferSelect;
 export type InsertWorldLogEvent = typeof worldLogEvents.$inferInsert;

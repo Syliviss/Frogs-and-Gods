@@ -15,12 +15,15 @@ import { FrogCreationPanel } from "./FrogCreationForm";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TILE_REGISTRY, getTileDef } from "../../../shared/tileRegistry";
 import type { TileChar } from "../../../shared/game.schema";
+import { DIVINE_POWER_LIST } from "../../../shared/divinePowers";
 import { ActionBar } from "@/components/ActionBar";
 import { ActionLog } from "@/components/ActionLog";
 import { useTickSync } from "@/hooks/useTickSync";
 import { useActionLogs } from "@/hooks/useActionLogs";
 import { InventoryTab } from "@/components/admin/InventoryTab";
 import { EnemiesTab } from "@/components/admin/EnemiesTab";
+import { GodViewTab } from "@/components/admin/GodViewTab";
+import { LairTab } from "@/components/admin/LairTab";
 import { ImageDropZone } from "@/components/admin/ImageDropZone";
 import { ItemStatsForm } from "@/components/admin/ItemStatsForm";
 import { spriteManager } from "@/lib/SpriteManager";
@@ -134,6 +137,7 @@ function FrogsTab() {
   const createFrog = trpc.admin.createTestFrog.useMutation({ onSuccess: () => refetch() });
   const grantXp    = trpc.admin.grantXp.useMutation({ onSuccess: () => refetch() });
   const resurrect  = trpc.admin.resurrectFrog.useMutation({ onSuccess: () => refetch() });
+  useTickSync(() => { void refetch(); });
 
   const [spawnOpen, setSpawnOpen]       = useState(false);
   const [spawnError, setSpawnError]     = useState<string | null>(null);
@@ -285,21 +289,130 @@ function FrogsTab() {
 
 function GodsTab() {
   const { data: gods, refetch } = trpc.admin.listGods.useQuery();
-  const setPower = trpc.admin.setDivinePower.useMutation({ onSuccess: () => refetch() });
-  const [powerAmounts, setPowerAmounts] = useState<Record<number, string>>({});
+  const setFavor  = trpc.admin.setFavor.useMutation({ onSuccess: () => refetch() });
+  const createGod = trpc.admin.createGod.useMutation({
+    onSuccess: () => {
+      refetch();
+      setNewGodName("");
+      setSelectedPowers([]);
+    },
+  });
+
+  const [favorAmounts, setFavorAmounts] = useState<Record<number, string>>({});
+
+  // ── Creation form state ──
+  const [newGodName, setNewGodName]       = useState("");
+  const [selectedPowers, setSelectedPowers] = useState<string[]>([]);
+
+  function togglePower(id: string) {
+    setSelectedPowers((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+    );
+  }
+
+  const canSubmit = newGodName.trim().length > 0 && selectedPowers.length === 3;
+
+  const TYPE_COLOR: Record<string, string> = {
+    BLESSING:       "#86efac",
+    CURSE:          "#f87171",
+    DIVINE_ABILITY: "#c084fc",
+  };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <p style={{ color: "#9ca3af", fontSize: 13 }}>{gods?.length ?? 0} gods watching</p>
-      <ScrollArea style={{ height: 480 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+      {/* ── Create God Form ── */}
+      <div style={{ background: "#0d1b2a", border: "1px solid #1e2a3a", borderRadius: 8, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+        <p style={{ color: "#fde68a", fontSize: 13, fontWeight: 600, margin: 0 }}>Create New God</p>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <Label style={{ color: "#9ca3af", fontSize: 12 }}>God Name</Label>
+          <Input
+            placeholder="e.g. The Verdant One"
+            value={newGodName}
+            onChange={(e) => setNewGodName(e.target.value)}
+            style={{ fontSize: 13, maxWidth: 280 }}
+          />
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Label style={{ color: "#9ca3af", fontSize: 12 }}>Starting Powers</Label>
+            <span style={{
+              fontSize: 11,
+              color: selectedPowers.length === 3 ? "#86efac" : "#9ca3af",
+              background: "#1e2a3a",
+              borderRadius: 4,
+              padding: "1px 6px",
+            }}>
+              {selectedPowers.length} / 3
+            </span>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {DIVINE_POWER_LIST.map((power) => {
+              const selected  = selectedPowers.includes(power.id);
+              const maxed     = !selected && selectedPowers.length >= 3;
+              return (
+                <button
+                  key={power.id}
+                  disabled={maxed}
+                  onClick={() => togglePower(power.id)}
+                  style={{
+                    padding:       "4px 10px",
+                    fontSize:      12,
+                    borderRadius:  6,
+                    border:        selected ? `1px solid ${TYPE_COLOR[power.type]}` : "1px solid #1e2a3a",
+                    background:    selected ? "#1a2d1a" : "#0d1b2a",
+                    color:         maxed ? "#374151" : (selected ? TYPE_COLOR[power.type] : "#9ca3af"),
+                    cursor:        maxed ? "not-allowed" : "pointer",
+                    transition:    "border-color 0.1s, color 0.1s",
+                  }}
+                >
+                  {power.name}
+                  <span style={{ marginLeft: 4, fontSize: 10, opacity: 0.6 }}>
+                    {power.type === "BLESSING" ? "✦" : power.type === "CURSE" ? "✖" : "◆"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Button
+            size="sm"
+            disabled={!canSubmit || createGod.isPending}
+            onClick={() => {
+              if (!canSubmit) return;
+              createGod.mutate({
+                name:           newGodName.trim(),
+                startingPowers: selectedPowers as unknown as ["HEAL_FROG" | "SMITE_ENEMY" | "SPAWN_ITEM" | "SPAWN_PREDATOR", "HEAL_FROG" | "SMITE_ENEMY" | "SPAWN_ITEM" | "SPAWN_PREDATOR", "HEAL_FROG" | "SMITE_ENEMY" | "SPAWN_ITEM" | "SPAWN_PREDATOR"],
+              });
+            }}
+          >
+            {createGod.isPending ? "Queuing…" : "Create God"}
+          </Button>
+          {createGod.isSuccess && (
+            <span style={{ fontSize: 12, color: "#86efac" }}>Queued — god appears after next heartbeat tick.</span>
+          )}
+          {createGod.isError && (
+            <span style={{ fontSize: 12, color: "#f87171" }}>{createGod.error.message}</span>
+          )}
+        </div>
+      </div>
+
+      {/* ── God List ── */}
+      <p style={{ color: "#9ca3af", fontSize: 13, margin: 0 }}>{gods?.length ?? 0} gods watching</p>
+      <ScrollArea style={{ height: 360 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: "1px solid #1e2a3a", color: "#9ca3af", textAlign: "left" }}>
               <th style={{ padding: "6px 10px" }}>ID</th>
               <th style={{ padding: "6px 10px" }}>Name</th>
-              <th style={{ padding: "6px 10px" }}>Divine Power</th>
+              <th style={{ padding: "6px 10px" }}>Starting Powers</th>
+              <th style={{ padding: "6px 10px" }}>Favor</th>
               <th style={{ padding: "6px 10px" }}>Interventions</th>
-              <th style={{ padding: "6px 10px" }}>Set Power</th>
+              <th style={{ padding: "6px 10px" }}>Set Favor</th>
             </tr>
           </thead>
           <tbody>
@@ -307,26 +420,31 @@ function GodsTab() {
               <tr key={g.id} style={{ borderBottom: "1px solid #0f1929" }}>
                 <td style={{ padding: "6px 10px", color: "#6b7280" }}>{g.id}</td>
                 <td style={{ padding: "6px 10px", color: "#fde68a" }}>{g.name}</td>
-                <td style={{ padding: "6px 10px", color: "#c084fc" }}>{g.divinePower}</td>
+                <td style={{ padding: "6px 10px", color: "#9ca3af", fontSize: 11 }}>
+                  {(g.startingPowers as string[])?.length > 0
+                    ? (g.startingPowers as string[]).join(", ")
+                    : <span style={{ color: "#374151" }}>—</span>}
+                </td>
+                <td style={{ padding: "6px 10px", color: "#c084fc" }}>{g.favor}</td>
                 <td style={{ padding: "6px 10px", color: "#9ca3af" }}>{g.totalInterventions}</td>
                 <td style={{ padding: "6px 10px" }}>
                   <div style={{ display: "flex", gap: 4 }}>
                     <Input
                       type="number"
                       placeholder="Amount"
-                      value={powerAmounts[g.id] ?? ""}
-                      onChange={(e) => setPowerAmounts((prev) => ({ ...prev, [g.id]: e.target.value }))}
+                      value={favorAmounts[g.id] ?? ""}
+                      onChange={(e) => setFavorAmounts((prev) => ({ ...prev, [g.id]: e.target.value }))}
                       style={{ width: 80, fontSize: 12 }}
                     />
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={!powerAmounts[g.id] || setPower.isPending}
+                      disabled={!favorAmounts[g.id] || setFavor.isPending}
                       onClick={() => {
-                        const amt = parseInt(powerAmounts[g.id] ?? "0");
+                        const amt = parseInt(favorAmounts[g.id] ?? "0");
                         if (!isNaN(amt)) {
-                          setPower.mutate({ godId: g.id, amount: amt });
-                          setPowerAmounts((prev) => ({ ...prev, [g.id]: "" }));
+                          setFavor.mutate({ godId: g.id, amount: amt });
+                          setFavorAmounts((prev) => ({ ...prev, [g.id]: "" }));
                         }
                       }}
                       style={{ fontSize: 11, padding: "2px 6px", height: "auto" }}
@@ -340,26 +458,6 @@ function GodsTab() {
           </tbody>
         </table>
       </ScrollArea>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────
-// LOOT TAB  (legacy removed — use Items tab)
-// ─────────────────────────────────────────────
-
-function LootTab() {
-  return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 300, flexDirection: "column", gap: 12 }}>
-      <span style={{ fontSize: 32 }}>🏺</span>
-      <p style={{ color: "#fde68a", fontFamily: "'Cinzel', serif", fontSize: 16, margin: 0 }}>
-        Vault (Items)
-      </p>
-      <p style={{ color: "#6b7280", fontSize: 13, textAlign: "center", maxWidth: 360, margin: 0 }}>
-        The flat loot table has been retired. All items are now 1-of-1 unique objects
-        managed in the <strong style={{ color: "#9ca3af" }}>Items</strong> tab, with
-        grid coordinates, Chrono-Relic cooldowns, and JSONB action definitions.
-      </p>
     </div>
   );
 }
@@ -519,6 +617,7 @@ function ItemsTab() {
   const utils = trpc.useUtils();
   const { data: worldStats } = trpc.admin.getWorldStats.useQuery();
   const { data: itemsList, refetch: refetchItems } = trpc.admin.listItems.useQuery();
+  useTickSync(() => { void refetchItems(); });
   const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
   const [spawnOpenItemId, setSpawnOpenItemId] = useState<string | null>(null);
   const [spawnX, setSpawnX] = useState(0);
@@ -988,6 +1087,15 @@ function VisionTab() {
     selectedFrog?.gridY ?? null,
   );
 
+  const frogTileChar = useMemo(() => {
+    if (!selectedFrog || !vision) return null;
+    const chunkX = Math.floor(selectedFrog.gridX / 16);
+    const chunkY = Math.floor(selectedFrog.gridY / 16);
+    const localX = ((selectedFrog.gridX % 16) + 16) % 16;
+    const localY = ((selectedFrog.gridY % 16) + 16) % 16;
+    return vision.chunks[`${chunkX}:${chunkY}`]?.[localY]?.[localX] ?? null;
+  }, [selectedFrog, vision]);
+
   const lookData = useMemo(() => {
     if (!selectedTile || !vision) return null;
     const { gridX, gridY } = selectedTile;
@@ -1163,6 +1271,10 @@ function VisionTab() {
             targetGridY: selectedTile.gridY,
           });
         }}
+        onOpenDoor={frogTileChar === "D" ? () => {
+          if (!selectedFrogId) return;
+          submitAction.mutate({ frogId: selectedFrogId, actionType: "OPEN_DOOR" });
+        } : undefined}
         error={submitMove.error?.message ?? submitAction.error?.message ?? equippedActionBar.error}
         tileDef={selectedTile ? getTileDef(
           vision?.chunks[`${Math.floor(selectedTile.gridX / 16)}:${Math.floor(selectedTile.gridY / 16)}`]
@@ -1364,18 +1476,22 @@ function UxTestingDropdown() {
               TESTING GROUND
             </div>
           </Link>
-          <div
-            style={{
-              padding: "10px 16px",
-              fontSize: 13,
-              color: "#4b5563",
-              cursor: "not-allowed",
-              fontFamily: "'Cinzel', serif",
-              letterSpacing: "0.04em",
-            }}
-          >
-            COMING SOON
-          </div>
+          <Link href="/map-studio">
+            <div
+              style={{
+                padding: "10px 16px",
+                fontSize: 13,
+                color: "#e2e8f0",
+                cursor: "pointer",
+                fontFamily: "'Cinzel', serif",
+                letterSpacing: "0.04em",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#0f1929")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              MAP STUDIO
+            </div>
+          </Link>
         </div>
       )}
     </div>
@@ -1561,14 +1677,15 @@ export default function Admin() {
               <TabsTrigger value="users">Users</TabsTrigger>
               <TabsTrigger value="frogs">Frogs</TabsTrigger>
               <TabsTrigger value="gods">Gods</TabsTrigger>
-              <TabsTrigger value="loot">Loot</TabsTrigger>
+              <TabsTrigger value="godview">God's View</TabsTrigger>
               <TabsTrigger value="world">World</TabsTrigger>
-              <TabsTrigger value="vision">Vision</TabsTrigger>
+              <TabsTrigger value="vision">Frog's View</TabsTrigger>
               <TabsTrigger value="items">Items</TabsTrigger>
               <TabsTrigger value="inventory">Inventory</TabsTrigger>
               <TabsTrigger value="enemies">Enemies</TabsTrigger>
               <TabsTrigger value="log">World Log</TabsTrigger>
               <TabsTrigger value="engine">Engine</TabsTrigger>
+              <TabsTrigger value="lair">God's Lair</TabsTrigger>
             </TabsList>
             <UxTestingDropdown />
           </div>
@@ -1584,7 +1701,7 @@ export default function Admin() {
             <TabsContent value="users"><UsersTab /></TabsContent>
             <TabsContent value="frogs"><FrogsTab /></TabsContent>
             <TabsContent value="gods"><GodsTab /></TabsContent>
-            <TabsContent value="loot"><LootTab /></TabsContent>
+            <TabsContent value="godview"><GodViewTab /></TabsContent>
             <TabsContent value="world"><WorldInspectorTab /></TabsContent>
             <TabsContent value="vision"><VisionTab /></TabsContent>
             <TabsContent value="items"><ItemsTab /></TabsContent>
@@ -1592,6 +1709,7 @@ export default function Admin() {
             <TabsContent value="enemies"><EnemiesTab /></TabsContent>
             <TabsContent value="log"><WorldLogTab /></TabsContent>
             <TabsContent value="engine"><EngineTab /></TabsContent>
+            <TabsContent value="lair"><LairTab /></TabsContent>
           </div>
         </Tabs>
       </div>

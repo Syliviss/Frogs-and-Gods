@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTickSync } from "@/hooks/useTickSync";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,9 +27,8 @@ export function EnemiesTab() {
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [pendingKills, setPendingKills] = useState<Set<number>>(new Set());
 
-  const { data: enemies, refetch } = trpc.admin.getEnemies.useQuery(undefined, {
-    refetchInterval: 10_000,
-  });
+  const { data: enemies, refetch } = trpc.admin.getEnemies.useQuery();
+  useTickSync(() => { void refetch(); });
 
   const spawnMutation = trpc.admin.triggerSpawn.useMutation({
     onSuccess: (data) => {

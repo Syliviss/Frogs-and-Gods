@@ -7,7 +7,9 @@ import { useTickSync } from "@/hooks/useTickSync";
 import { useActionLogs } from "@/hooks/useActionLogs";
 import { useEquippedActionBar } from "@/hooks/useEquippedActionBar";
 import { getTileDef } from "../../../shared/tileRegistry";
-import { spriteManager } from "@/lib/SpriteManager";
+import { spriteManager, SpriteManager } from "@/lib/SpriteManager";
+
+const frogSpriteManager = new SpriteManager();
 
 const CHUNK_SIZE = 16;
 
@@ -70,6 +72,23 @@ export default function GamePage() {
     }
   }, [pixelDataQuery.data]);
 
+  // Lazy frog sprite fetch: mirrors item sprite pattern, separate cache to avoid ID collisions
+  const newFrogIds = (vision?.frogs ?? [])
+    .map(f => f.id)
+    .filter(id => !frogSpriteManager.has(String(id)));
+
+  const frogSpriteQuery = trpc.frog.getFrogSpriteData.useQuery(
+    { frogIds: newFrogIds },
+    { enabled: newFrogIds.length > 0 },
+  );
+
+  useEffect(() => {
+    if (!frogSpriteQuery.data) return;
+    for (const { id, modelJson } of frogSpriteQuery.data) {
+      if (modelJson) frogSpriteManager.bake(String(id), modelJson);
+    }
+  }, [frogSpriteQuery.data]);
+
   useTickSync(() => {
     void visionQuery.refetch().then(result => {
       if (!result.data || !selectedFrogId) return;
@@ -78,6 +97,8 @@ export default function GamePage() {
       const groundIds = (result.data.items ?? []).map(i => i.itemId);
       const heldIds   = (inventoryQuery.data ?? []).map(i => i.itemId);
       spriteManager.prune(new Set([...groundIds, ...heldIds]));
+      const visibleFrogIds = new Set((result.data.frogs ?? []).map(f => String(f.id)));
+      frogSpriteManager.prune(visibleFrogIds);
     });
     void frogsQuery.refetch();
     void inventoryQuery.refetch();
@@ -95,8 +116,8 @@ export default function GamePage() {
   const centerChunkY = effectivePos ? Math.floor(effectivePos.gridY / CHUNK_SIZE) : 0;
 
   const entities = [
-    ...(vision?.frogs ?? []).map(f => ({ gridX: f.gridX, gridY: f.gridY, type: "frog" as const })),
-    ...(vision?.predators ?? []).map(p => ({ gridX: p.gridX, gridY: p.gridY, type: "predator" as const })),
+    ...(vision?.frogs ?? []).map(f => ({ gridX: f.gridX, gridY: f.gridY, type: "frog" as const, id: f.id })),
+    ...(vision?.predators ?? []).map(p => ({ gridX: p.gridX, gridY: p.gridY, type: "predator" as const, id: p.id })),
   ];
 
   const groundItems = (vision?.items ?? [])
@@ -166,6 +187,7 @@ export default function GamePage() {
         chunks={vision?.chunks ?? {}}
         entities={entities}
         groundItems={groundItems}
+        frogSpriteManager={frogSpriteManager}
         selectedTile={equippedActionBar.targetingMode ? undefined : (selectedTile ?? undefined)}
         onTileClick={(gridX, gridY) => {
           if (equippedActionBar.targetingMode) {

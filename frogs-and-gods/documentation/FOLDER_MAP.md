@@ -30,14 +30,14 @@ Navigational reference for the project. Every folder and notable file, one line 
 | File | Purpose |
 |------|---------|
 | `main.tsx` | React entrypoint — tRPC provider (httpBatchLink + superjson), router mount |
-| `App.tsx` | wouter router: `/` → Admin, `/game` → GamePage, `/create-frog` → FrogCreationForm |
+| `App.tsx` | wouter router: `/` → Admin, `/game` → GamePage, `/create-frog` → FrogCreationForm, `/map-studio` → MapStudio |
 | `index.css` | Global styles — dark fantasy theme, Tailwind base |
 
 ### `client/src/components/`
 
 | File | Purpose |
 |------|---------|
-| `Viewport.tsx` | HTML5 Canvas isometric renderer — 3×3 chunk view, click detection, sprite overlay |
+| `Viewport.tsx` | HTML5 Canvas isometric renderer — 3×3 chunk view, click detection, item + frog sprite overlay, `frogSpriteManager` prop |
 | `ActionBar.tsx` | Action button row — STEP/HOP/PICKUP dropdown/item-granted actions, TARGETING mode UI for SWING |
 | `ActionLog.tsx` | Scrolling feed of resolved action events |
 | `ErrorBoundary.tsx` | React error boundary for crash isolation |
@@ -51,6 +51,8 @@ Navigational reference for the project. Every folder and notable file, one line 
 | `WorldInspectorTab.tsx` | World inspector — 315×315 biome coverage canvas, chunk terrain viewer, POI registry list |
 | `ImageDropZone.tsx` | Pixel art uploader — drag-and-drop 16×16 PNG → item pixel_data JSONB |
 | `ItemStatsForm.tsx` | Admin item stats editor form |
+| `GodViewTab.tsx` | God's View tab — free-camera isometric viewport, divine action bar, tick-paced pan, action log |
+| `LairTab.tsx` | God's Lair tab — instance manager, 16×16 ASCII paint grid, palette, overworld entrance placer |
 
 #### `client/src/components/ui/`
 
@@ -80,18 +82,19 @@ Navigational reference for the project. Every folder and notable file, one line 
 | File | Purpose |
 |------|---------|
 | `trpc.ts` | tRPC React client setup — `createTRPCReact<AppRouter>()`, httpBatchLink to `/api/trpc` |
-| `SpriteManager.ts` | Item sprite loader/cache — converts pixel_data arrays to Canvas ImageData |
+| `SpriteManager.ts` | Sprite loader/cache (exported class + default `spriteManager` singleton) — converts pixel_data/modelJson arrays to baked Canvas elements; used for both items and frogs |
 | `utils.ts` | Tailwind class merge utility (cn) |
 
 ### `client/src/pages/`
 
 | File | Purpose |
 |------|---------|
-| `Admin.tsx` | Dev console — tabbed UI: Users, Frogs, Gods, World (WorldInspectorTab), Items, Enemies, WorldLog, Engine |
+| `Admin.tsx` | Dev console — tabbed UI: Users, Frogs, Gods, God's View, World, Vision, Items, Inventory, Enemies, God's Lair, WorldLog, Engine |
 | `GamePage.tsx` | Player-facing game view (functional but not yet live — see `THE_VOID_INVENTORY.md`) |
 | `FrogCreationForm.tsx` | Character creation — name, species, stat distribution |
 | `NotFound.tsx` | 404 page |
-| `TestingGround.tsx` | Dev scratch page — not linked in nav |
+| `TestingGround.tsx` | Dev scratch page — linked from admin UX dropdown |
+| `MapStudio.tsx` | Developer screenshot tool — large configurable isometric ASCII map canvas, PNG export; linked from admin UX dropdown |
 
 ---
 
@@ -141,10 +144,19 @@ Every action handler lives here. The central registry is `index.ts`.
 | `throw.ts` | THROW — throw item to ground (range 3) |
 | `swing.ts` | SWING — multi-tile melee AoE via Generic Intent Builder |
 | `pickup.ts` | PICKUP — pick up a GROUND item into inventory (Chebyshev 1 range) |
+| `create_god.ts` | CREATE_GOD — god action: insert a new god row with name + 3 starting powers |
 | `create_item.ts` | CREATE_ITEM — god action: create item in VOID state |
 | `spawn_item.ts` | SPAWN_ITEM — god action: place item at world coords |
 | `spawn.ts` | SPAWN_PREDATOR — god action: insert predator row |
 | `kill_predator.ts` | KILL_PREDATOR — god action: hard-delete predator |
+| `divine_heal_frog.ts` | DIV_HEAL_FROG — divine intervention: heal target frog +25 HP, deducts 25 favor |
+| `divine_smite_enemy.ts` | DIV_SMITE_ENEMY — divine intervention: deal 50 damage to target predator, deducts 25 favor |
+| `divine_spawn_item.ts` | DIV_SPAWN_ITEM — divine intervention: place existing item at target tile, deducts 25 favor |
+| `divine_spawn_predator.ts` | DIV_SPAWN_PREDATOR — divine intervention: spawn new predator at target tile, deducts 25 favor |
+| `god_pan.ts` | GOD_PAN — pure event: validates camera pan, no world mutation, no favor cost |
+| `div_update_lair.ts` | DIV_UPDATE_LAIR — promotes staged tile data to committed lair layout; costs 5 favor/changed tile |
+| `div_place_lair.ts` | DIV_PLACE_LAIR — anchors lair instance to overworld tile; free first time, 50 favor repeat |
+| `open_door.ts` | OPEN_DOOR — frog traversal: enter lair from overworld D tile, or exit from lair D tile |
 | `slither.ts` | SLITHER — predator: move head 1 tile, shift body segments |
 | `strike.ts` | STRIKE — predator: 7 flat damage, chains to WRAP on kill |
 | `wrap.ts` | WRAP — predator: canonical constriction set + escape roll |
@@ -208,6 +220,14 @@ Modular procedural generation pipeline. All logic moved here from the old `serve
 |------|---------|
 | `worldGenerator.ts` | Backward-compat shim — re-exports `CHUNK_SIZE`, `WORLD_SEED`, and a 3-arg `generateChunk` wrapper |
 
+### `server/assets/`
+
+Static game asset definitions used at creation time.
+
+| File | Purpose |
+|------|---------|
+| `frogModels.ts` | Frog visual model registry — `FrogColorPalette` type, `FROG_PALETTES` per species, base 16×16 pixel template, `generateFrogPixelData(species)` generator |
+
 ### `server/`
 
 | File | Purpose |
@@ -223,7 +243,8 @@ Code imported by both `client/` and `server/`. Zero side effects, no DB, no impo
 
 | File | Purpose |
 |------|---------|
-| `game.schema.ts` | All Zod schemas and inferred TypeScript types (Frog, Item, Chunk, ActionSchema, etc.) |
+| `game.schema.ts` | All Zod schemas and inferred TypeScript types (Frog, Item, Chunk, ActionSchema, `CreateGodPayloadSchema`, etc.) |
+| `divinePowers.ts` | Hardcoded list of selectable god powers (`DIVINE_POWER_LIST`) — source of truth for god creation UI and CREATE_GOD validation |
 | `tileRegistry.ts` | `TILE_REGISTRY` — tile char → label, color, movementCost |
 | `movement.ts` | Pure movement math — `movementBudget(dex)`, `chebyshevDistance()`, `calculateRemainingMove()` |
 | `movement.test.ts` | Movement math unit tests |
@@ -239,10 +260,15 @@ Database schema and migrations. Managed by Drizzle Kit (`yarn db:push`).
 
 | File | Purpose |
 |------|---------|
-| `schema.ts` | Full Drizzle table definitions + enums (13 core tables) |
+| `schema.ts` | Full Drizzle table definitions + enums (15 core tables — includes instances, lairEntrances) |
 | `relations.ts` | Drizzle relation definitions |
 | `0000_massive_the_anarchist.sql` | Initial migration — all base tables |
 | `0001_add_pixel_data.sql` | Added pixel_data JSONB column to items |
+| `0002_add_scale_indexes.sql` | Added 6 performance indexes (frogs grid/owner, items grid/owner_state, pending_actions actor_status, worldlog created_at) |
+| `0003_gods_revamp.sql` | Gods schema revamp migration |
+| `0004_instances_and_lairs.sql` | Added instances + lair_entrances tables; added instanceId FK to frogs, predators, items |
+| `0005_drop_party_tables.sql` | Dropped partyId column from frogs |
+| `0006_frog_model_json.sql` | Added model_json JSONB column to frogs (256-element per-species pixel art sprite) |
 | `meta/_journal.json` | Migration history journal |
 | `meta/0000_snapshot.json` | Schema snapshot for diffing |
 | `drizzle.config.ts` | Drizzle Kit configuration |
@@ -268,6 +294,7 @@ Standalone scripts. **Not included in `tsconfig.json`** — run with `npx tsx sc
 | `ACTIONS_DICTIONARY.md` | Dev reference for every action handler (frog, predator, god) |
 | `ENTITIES_DICTIONARY.md` | Dev reference for predator AI system and entity brains |
 | `THE_VOID_INVENTORY.md` | Ghost code, enum stubs, architectural violations, unimplemented planned features |
+| `SCALABILITY_ARCHITECTURE.md` | Bottleneck map by player count, index audit, scaling roadmap |
 
 Root-level docs (kept separately):
 - `DIVINE_ASCII_ARCHITECTURE.md` — Canvas rendering data path

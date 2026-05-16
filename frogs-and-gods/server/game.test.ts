@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { distributeXp, xpToNextLevel, type CombatantStats } from "./engine/xpDistributor";
 import {
   GodInterventionSchema,
-  PartyInviteSchema,
   PredatorSchema,
 } from "../shared/game.schema";
 
@@ -135,18 +134,6 @@ describe("game.schema — GodInterventionSchema", () => {
       interventionType: "SMITE_ENEMY",
       magnitude: 999,
     });
-    expect(result.success).toBe(false);
-  });
-});
-
-describe("game.schema — PartyInviteSchema", () => {
-  it("accepts valid party invite", () => {
-    const result = PartyInviteSchema.safeParse({ partyId: 1, invitedFrogId: 2 });
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects non-positive IDs", () => {
-    const result = PartyInviteSchema.safeParse({ partyId: 0, invitedFrogId: 2 });
     expect(result.success).toBe(false);
   });
 });

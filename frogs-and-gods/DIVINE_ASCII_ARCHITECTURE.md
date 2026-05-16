@@ -74,19 +74,21 @@ The server runs a single, shared `HeartbeatEngine` instance (`server/engine/hear
 HeartbeatEngine
 │
 ├── setInterval (500ms) ────► emit("subtick")
+│                               │  [skipped if previous tick's Exhale is still running]
 │                               └─► processAllActions()
-│                               └─► broadcast ENGINE_QUIVER + SUBTICK_LOGS
+│                                     └─► broadcast SUBTICK_LOGS + ENGINE_QUIVER (after Exhale)
 │
 └── setTimeout (10_000ms) ──► emit("broadcast")
+                                │  [deferred until in-flight tick finishes, if any]
                                 └─► broadcast ENGINE_TICK
                                 └─► restart both timers
 ```
 
-**The 500ms sub-tick** is the action-resolution pulse. Every half-second, the engine drains the `pending_actions` table of any queued actions whose `resolve_bucket` has elapsed, executes them against the database (movement, combat, item use), and broadcasts a lightweight `SUBTICK_LOGS` message containing a human-readable log of what happened. This is what makes actions feel responsive — a submitted move is resolved within half a second, not at the end of a 10-second epoch.
+**The 500ms sub-tick** is the action-resolution pulse. Every half-second, the engine drains the `pending_actions` table of any queued actions whose `resolve_bucket` has elapsed, executes them against the database (movement, combat, item use), and broadcasts `SUBTICK_LOGS` and `ENGINE_QUIVER` after the Great Exhale transaction commits. If the previous subtick's Exhale is still running when the interval fires, that subtick is skipped — no parallel ticks, no double-resolution.
 
-**The 10-second macro tick** is the world-state broadcast signal. It fires once every 10 seconds and broadcasts a single `ENGINE_TICK` message to every connected client. This signal tells clients: *the authoritative world state has advanced; go fetch a fresh snapshot.*
+**The 10-second macro tick** is the world-state broadcast signal. It fires once every 10 seconds and broadcasts `ENGINE_TICK` to every connected client — but if a subtick is still in-flight when the 10s timer expires, the broadcast is held until the tick finishes. This ensures clients never receive ENGINE_TICK while state is mid-commit.
 
-The two loops are independent. Sub-ticks fire 20 times per macro tick interval, continuously draining the action queue. The macro tick is purely a synchronization beacon.
+The timer model is independent — the heartbeat fires on fixed intervals regardless. The sequencing guard lives in `socket.ts` (`tickInFlight` / `broadcastPending` flags), not in the heartbeat itself.
 
 ---
 
@@ -99,9 +101,10 @@ The core heartbeat messages:
 | Message Type    | When              | Payload                                    | Purpose                                    |
 |-----------------|-------------------|--------------------------------------------|--------------------------------------------|
 | `ENGINE_TICK`   | Every 10 seconds  | `{ type: "ENGINE_TICK", timestamp: number }` | Signal: refetch your vision snapshot       |
-| `ENGINE_QUIVER` | Every 500ms       | `{ type: "ENGINE_QUIVER", timestamp: number }` | Heartbeat keepalive pulse                  |
+| `ENGINE_QUIVER` | After each subtick Exhale | `{ type: "ENGINE_QUIVER", timestamp: number }` | "Tick committed" pulse — fires after Great Exhale, not before |
 | `SUBTICK_LOGS`  | Every 500ms (if any) | `{ type: "SUBTICK_LOGS", logs: ActionLogEntry[] }` | Human-readable action outcomes           |
-| `WORLD_LOG`     | On events         | God/combat event payloads                  | Narrative event feed                       |
+| `WORLD_LOG`     | On events (viewport-culled) | God/combat event payloads           | Narrative event feed — sent only to clients whose viewport overlaps the event's origin chunk |
+| `VIEWPORT_UPDATE` | Client → Server | `{ type: "VIEWPORT_UPDATE", chunkX, chunkY }` | Client reports its chunk center; enables spatial broadcast filtering |
 
 The `ENGINE_TICK` message is a **signal, not a payload**. It carries no chunk data, no entity positions — just a timestamp. Its sole job is to tell the client "something may have changed; go ask the server what the world looks like now."
 
@@ -138,13 +141,13 @@ Server: getPlayerVision handler
 Response:
 {
   chunks:    Record<"cx:cy", string[][]>,  // e.g. "2:3" → 16×16 char grid
-  frogs:     Frog[],                       // absolute gridX, gridY
+  frogs:     Frog[],                       // absolute gridX, gridY — modelJson STRIPPED
   predators: Predator[],                   // absolute gridX, gridY
   items:     Item[]                        // absolute gridX, gridY — pixelData STRIPPED
 }
 ```
 
-**Note:** `pixel_data` is explicitly stripped from the `items` array before the response is sent:
+**Note:** Both `pixel_data` (items) and `model_json` (frogs) are explicitly stripped before the response is sent:
 
 ```typescript
 // server/routers.ts — inside getPlayerVision
@@ -184,7 +187,7 @@ Each redraw runs four sequential passes over the same canvas context:
 
 Ground items are drawn *before* entities so frogs always appear visually on top of loot.
 
-**Pass 4 — Entities.** Draw frogs as green (`#00ff88`) 9×9 `fillRect` squares. Draw predators as red (`#ff4444`) ASCII `'S'` characters via `ctx.fillText("S", screenX, screenY)` — rendered at the same monospace font as terrain tiles (`bold 12px monospace`, center-aligned, middle baseline). No sprite art — entities render as either colored squares or ASCII glyphs.
+**Pass 4 — Entities.** Draw frogs as 18×18 pixel sprites via `frogSpriteManager.get(frog.id)`, falling back to green (`#00ff88`) 9×9 `fillRect` squares when the sprite hasn't baked yet. Draw predators as red (`#ff4444`) ASCII `'S'` characters via `ctx.fillText("S", screenX, screenY)`. Frog sprites are lazily loaded from `frogs.model_json` (see §7 below); predators remain ASCII glyphs.
 
 **Pass 5 — Selection highlight.** If a tile is selected, draw a yellow (`#facc15`) 18×14 outline rectangle over it.
 
@@ -281,6 +284,56 @@ SpriteManager.bake(itemId, pixels)
 Viewport Pass 3 — spriteManager.get(itemId)
     → drawImage (24×24, no smoothing)   if baked
     → fillRect  pink 9×9 square         if not baked / no pixel art
+```
+
+---
+
+### 7. Frog Sprite Rendering: The Model Pipeline
+
+Frog sprites follow the same lazy-load pipeline as item sprites, with one key difference: the pixel data is **generated server-side at frog creation** from a species palette and a shared template, rather than being authored by hand.
+
+#### Step 1 — Database storage
+
+`model_json` is a JSONB column on the `frogs` table — a 256-element `(string | null)[]` representing a 16×16 pixel art sprite. It is populated at creation time by `generateFrogPixelData(species)` in `server/assets/frogModels.ts`.
+
+#### Step 2 — The model registry (`server/assets/frogModels.ts`)
+
+The registry defines two things:
+
+- **`FROG_PALETTES`** — a `Record<FrogSpecies, FrogColorPalette>` mapping each species to four color slots: `body`, `belly`, `eye`, `pupil`. **This is the only place you need to edit to change a species' appearance.**
+- **`BASE_TEMPLATE`** — a 256-element `PixelKey[]` array defining the frog silhouette. Each entry maps a pixel to a palette slot (`"body"`, `"belly"`, `"eye"`, `"pupil"`, or `null` for transparent).
+
+`generateFrogPixelData(species)` maps template keys through the species palette → output hex array. Template shape changes affect all species; palette changes affect only the target species.
+
+#### Steps 3–5 — Exclusion, lazy fetch, bake, prune
+
+Identical to the item sprite pipeline:
+
+- `getPlayerVision` strips `model_json` from the frog rows it returns
+- `frog.getFrogSpriteData({ frogIds })` fetches `{ id, modelJson }[]` on demand (max 64)
+- A second `SpriteManager` instance (`frogSpriteManager` in `GamePage.tsx`) bakes and caches sprites keyed by `String(frog.id)` — separate from the item cache to prevent ID collisions
+- `frogSpriteManager.prune(visibleFrogIds)` is called after each tick refetch
+
+#### Viewport rendering
+
+In Pass 3, for each frog entity: `frogSpriteManager.get(String(entity.id))` → `drawImage(18×18)` if baked, or green `#00ff88` 9×9 square fallback if not.
+
+```
+DB: frogs.model_json (JSONB 256-element array, generated from FROG_PALETTES at creation)
+    │
+    │  [excluded from getPlayerVision response]
+    │
+    ▼
+frog.getFrogSpriteData (on-demand tRPC query, triggered by vision refetch)
+    │
+    ▼
+frogSpriteManager.bake(String(frog.id), modelJson)
+    → off-screen 16×16 HTMLCanvasElement, stored in Map
+    │
+    ▼
+Viewport Pass 3 — frogSpriteManager.get(String(entity.id))
+    → drawImage (18×18, no smoothing)    if baked
+    → fillRect  green 9×9 square         if not baked / null modelJson
 ```
 
 ---
@@ -449,10 +502,45 @@ The gate is at the tRPC layer only. If it were inside `runAction()`, the SWING r
 |------|---------|-------|
 | 1 | Terrain tiles | ASCII char |
 | 2 | Ground items | Sprite / pink fallback |
-| 3 | Entities | Frogs: green 9×9 squares; Predators: red `'S'` ASCII glyph via fillText |
+| 3 | Entities | Frogs: 18×18 sprite / green 9×9 fallback; Predators: red `'S'` ASCII glyph |
 | 4 | Selected tile | Yellow stroke |
 | 5a | Confirmed targeting tiles | Red semi-transparent fill |
 | 5b | Hovered target tile | Orange semi-transparent fill |
+
+---
+
+## Map Studio (Developer Screenshot Tool)
+
+`client/src/pages/MapStudio.tsx` is a dedicated developer page reachable at `/map-studio` (linked from the admin panel's "USER EXPERIENCE TESTING" dropdown). It renders an arbitrarily large version of the isometric ASCII map for content creation and screenshot work.
+
+### Controls
+
+| Control | Range | Effect |
+|---------|-------|--------|
+| Center X / Center Y | any valid chunk coord | Camera center (same as `getGodVision`) |
+| Radius | 1–5 | Determines how many chunks surround the center: (2r+1)² total |
+| Scale | 1×, 2×, 3× | Multiplies `TILE_W` (24→48→72) and `TILE_H` (12→24→36) |
+| Entities toggle | on/off | Show/hide frogs and predators |
+| Items toggle | on/off | Show/hide ground items |
+| Save PNG | — | Downloads the full canvas as a PNG file |
+
+### Canvas Sizing
+
+```
+D        = (2 × radius + 1) × 16   // tile diameter
+TILE_W   = 24 × scale
+TILE_H   = 12 × scale
+CANVAS_W = D × TILE_W
+CANVAS_H = D × TILE_H + TILE_H     // +1 row top margin
+OFFSET_X = CANVAS_W / 2
+OFFSET_Y = TILE_H
+```
+
+At radius 5 and scale 3 the canvas reaches ~12,672 × 6,336 px — intentionally large for high-resolution export.
+
+### Server Query
+
+`admin.getMapStudioChunks` (`GetMapStudioChunksSchema` — `centerChunkX`, `centerChunkY`, `radius`) fetches the full (2r+1)² chunk grid in one request, applies tile overrides, and returns `{ chunks, frogs, predators, items }`. It reuses the same DB helpers as `getGodVision`; the only difference is the variable-radius coords array.
 
 ---
 

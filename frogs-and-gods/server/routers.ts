@@ -2,11 +2,8 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
   CreateFrogSchema,
-  CreatePartySchema,
   GetPlayerVisionSchema,
-  JoinPartySchema,
   MoveActionSchema,
-  PartyInviteSchema,
   type FrogSpecies,
 } from "../shared/game.schema";
 import { validateAndQueueMovement } from "./engine/movement";
@@ -14,26 +11,28 @@ import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { adminRouter } from "./routers/admin";
 import {
-  acceptPartyInvite,
   createFrog,
   createGod,
-  createParty,
-  createPartyInvite,
   getChunksByCoords,
   getEquippedItemsByFrogId,
   getGroundItemsNear,
   getFrogById,
   getFrogByOwnerId,
-  getFrogsByPartyId,
   getFrogsInBounds,
+  getFrogsByInstanceId,
+  getFrogSpriteDataByIds,
   getGodByUserId,
+  getInstanceById,
   getItemsInBounds,
   getItemPixelDataByIds,
-  getPendingInvitesForFrog,
+  getItemsByInstanceId,
+  getOverridesByChunks,
   getPredatorsInChunkArea,
+  getPredatorsByInstanceId,
   getRecentWorldLog,
   updateFrog,
 } from "./db";
+import { generateFrogPixelData } from "./assets/frogModels";
 import { CHUNK_SIZE } from "./utils/worldGenerator";
 import type { FrogStats } from "../drizzle/schema";
 
@@ -103,6 +102,7 @@ export const appRouter = router({
           statsJson:    finalStats,
           currentHp:    finalStats.maxHp,
           currentMana:  finalStats.maxMana,
+          modelJson:    generateFrogPixelData(input.species),
         });
         return { success: true };
       }),
@@ -131,6 +131,22 @@ export const appRouter = router({
         const frog = await getFrogById(input.frogId);
         if (!frog) throw new TRPCError({ code: "NOT_FOUND", message: "Frog not found." });
 
+        if (frog.instanceId !== null) {
+          const instance = await getInstanceById(frog.instanceId);
+          if (!instance || !instance.tileDataJson) {
+            return { chunks: {}, frogs: [], predators: [], items: [] };
+          }
+          const grid = JSON.parse(instance.tileDataJson) as string[][];
+          const [instanceFrogs, instancePredators, instanceItems] = await Promise.all([
+            getFrogsByInstanceId(frog.instanceId),
+            getPredatorsByInstanceId(frog.instanceId),
+            getItemsByInstanceId(frog.instanceId),
+          ]);
+          const groundItems = instanceItems.map(({ pixelData: _px, ...rest }) => rest);
+          const strippedFrogs = instanceFrogs.map(({ modelJson: _m, ...rest }) => rest);
+          return { chunks: { "0:0": grid }, frogs: strippedFrogs, predators: instancePredators, items: groundItems };
+        }
+
         const centerCX = Math.floor(frog.gridX / CHUNK_SIZE);
         const centerCY = Math.floor(frog.gridY / CHUNK_SIZE);
 
@@ -144,11 +160,12 @@ export const appRouter = router({
         const minGY = (centerCY - 1) * CHUNK_SIZE;
         const maxGY = (centerCY + 2) * CHUNK_SIZE - 1;
 
-        const [chunkRows, frogRows, predatorRows, itemRows] = await Promise.all([
+        const [chunkRows, frogRows, predatorRows, itemRows, overrides] = await Promise.all([
           getChunksByCoords(coords),
           getFrogsInBounds(minGX, maxGX, minGY, maxGY),
           getPredatorsInChunkArea(coords),
           getItemsInBounds(minGX, maxGX, minGY, maxGY),
+          getOverridesByChunks(coords),
         ]);
 
         const chunks: Record<string, string[][]> = {};
@@ -157,16 +174,33 @@ export const appRouter = router({
             chunks[`${chunk.chunkX}:${chunk.chunkY}`] = JSON.parse(chunk.terrainDataJson) as string[][];
         }
 
+        for (const ov of overrides) {
+          const grid = chunks[`${ov.chunkX}:${ov.chunkY}`];
+          if (grid) {
+            const localX = ov.gridX - ov.chunkX * 16;
+            const localY = ov.gridY - ov.chunkY * 16;
+            if (grid[localY]) grid[localY][localX] = ov.newChar;
+          }
+        }
+
         // Strip pixelData from the tick payload — clients fetch it lazily via getItemPixelData
         const groundItems = itemRows.map(({ pixelData: _px, ...rest }) => rest);
+        // Strip modelJson — clients fetch it lazily via getFrogSpriteData
+        const groundFrogs = frogRows.map(({ modelJson: _m, ...rest }) => rest);
 
-        return { chunks, frogs: frogRows, predators: predatorRows, items: groundItems };
+        return { chunks, frogs: groundFrogs, predators: predatorRows, items: groundItems };
       }),
 
     getItemPixelData: publicProcedure
       .input(z.object({ itemIds: z.array(z.string()).min(1).max(64) }))
       .query(async ({ input }) => {
         return getItemPixelDataByIds(input.itemIds);
+      }),
+
+    getFrogSpriteData: publicProcedure
+      .input(z.object({ frogIds: z.array(z.number().int().positive()).min(1).max(64) }))
+      .query(async ({ input }) => {
+        return getFrogSpriteDataByIds(input.frogIds);
       }),
 
     getEquippedActions: protectedProcedure
@@ -208,64 +242,6 @@ export const appRouter = router({
         await createGod({ userId: ctx.user.id, name: input.name });
         return { success: true };
       }),
-  }),
-
-  // ── PARTY ─────────────────────────────────
-  party: router({
-    create: protectedProcedure
-      .input(CreatePartySchema)
-      .mutation(async ({ ctx, input }) => {
-        const frog = await getFrogByOwnerId(ctx.user.id);
-        if (!frog) throw new TRPCError({ code: "FORBIDDEN", message: "Only Frogs can create parties." });
-        if (frog.isDead) throw new TRPCError({ code: "FORBIDDEN", message: "Dead Frogs cannot create parties." });
-
-        const party = await createParty({ name: input.name, leaderId: frog.id });
-        await updateFrog(frog.id, { partyId: party.id });
-        return party;
-      }),
-
-    invite: protectedProcedure
-      .input(PartyInviteSchema)
-      .mutation(async ({ ctx, input }) => {
-        const frog = await getFrogByOwnerId(ctx.user.id);
-        if (!frog || !frog.partyId) throw new TRPCError({ code: "FORBIDDEN", message: "You must be in a party to invite." });
-        if (frog.partyId !== input.partyId) throw new TRPCError({ code: "FORBIDDEN", message: "You can only invite to your own party." });
-
-        const targetFrog = await getFrogById(input.invitedFrogId);
-        if (!targetFrog) throw new TRPCError({ code: "NOT_FOUND", message: "Target Frog not found." });
-        if (targetFrog.isDead) throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot invite a dead Frog." });
-
-        const members = await getFrogsByPartyId(input.partyId);
-        if (members.length >= 4) throw new TRPCError({ code: "BAD_REQUEST", message: "Party is full (max 4)." });
-
-        await createPartyInvite(input.partyId, input.invitedFrogId, frog.id);
-        return { success: true };
-      }),
-
-    join: protectedProcedure
-      .input(JoinPartySchema)
-      .mutation(async ({ ctx, input }) => {
-        const frog = await getFrogByOwnerId(ctx.user.id);
-        if (!frog) throw new TRPCError({ code: "FORBIDDEN", message: "Only Frogs can join parties." });
-        if (frog.isDead) throw new TRPCError({ code: "FORBIDDEN", message: "Dead Frogs cannot join parties." });
-
-        const party = await acceptPartyInvite(input.inviteId, frog.id);
-        if (!party) throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found or already processed." });
-        return party;
-      }),
-
-    myParty: protectedProcedure.query(async ({ ctx }) => {
-      const frog = await getFrogByOwnerId(ctx.user.id);
-      if (!frog || !frog.partyId) return null;
-      const members = await getFrogsByPartyId(frog.partyId);
-      return { partyId: frog.partyId, members };
-    }),
-
-    pendingInvites: protectedProcedure.query(async ({ ctx }) => {
-      const frog = await getFrogByOwnerId(ctx.user.id);
-      if (!frog) return [];
-      return getPendingInvitesForFrog(frog.id);
-    }),
   }),
 
   // ── WORLD LOG ─────────────────────────────

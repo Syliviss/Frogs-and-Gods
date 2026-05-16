@@ -8,6 +8,7 @@ import Admin from "./pages/Admin";
 import FrogCreationForm from "./pages/FrogCreationForm";
 import GamePage from "./pages/GamePage";
 import TestingGround from "./pages/TestingGround";
+import MapStudio from "./pages/MapStudio";
 
 function Router() {
   return (
@@ -16,6 +17,7 @@ function Router() {
       <Route path="/create-frog" component={FrogCreationForm} />
       <Route path="/game" component={GamePage} />
       <Route path="/testing-ground" component={TestingGround} />
+      <Route path="/map-studio" component={MapStudio} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

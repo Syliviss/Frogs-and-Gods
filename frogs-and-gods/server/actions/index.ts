@@ -1,4 +1,5 @@
 import type { ActionContext, ActionHandler, NotifyFn } from "./_types";
+import { SimulatedState, type UpdateInstruction } from "../engine/types";
 import { getFrogById, hasFrogActedThisHeartbeat, createPendingAction } from "../db";
 import { pushActionLog } from "../engine/actionLog";
 import { stepHandler } from "./step";
@@ -14,6 +15,15 @@ import { createItemHandler } from "./create_item";
 import { spawnItemHandler } from "./spawn_item";
 import { spawnPredatorHandler } from "./spawn";
 import { killPredatorHandler } from "./kill_predator";
+import { createGodHandler } from "./create_god";
+import { divineHealFrogHandler } from "./divine_heal_frog";
+import { divineSmiteEnemyHandler } from "./divine_smite_enemy";
+import { divineSpawnItemHandler } from "./divine_spawn_item";
+import { divineSpawnPredatorHandler } from "./divine_spawn_predator";
+import { godPanHandler } from "./god_pan";
+import { divUpdateLairHandler } from "./div_update_lair";
+import { divPlaceLairHandler } from "./div_place_lair";
+import { openDoorHandler } from "./open_door";
 import { slitherHandler } from "./slither";
 import { strikeHandler } from "./strike";
 import { wrapHandler } from "./wrap";
@@ -38,13 +48,22 @@ const ACTION_REGISTRY: Record<string, ActionHandler> = {
   GIVE:       giveHandler,
   SWING:      swingHandler,
   PICKUP:     pickupHandler,
+  OPEN_DOOR:  openDoorHandler,
 };
 
 export const GOD_ACTION_REGISTRY: Record<string, GodActionHandler> = {
-  CREATE_ITEM:    createItemHandler,
-  SPAWN_ITEM:     spawnItemHandler,
-  SPAWN_PREDATOR: spawnPredatorHandler,
-  KILL_PREDATOR:  killPredatorHandler,
+  CREATE_GOD:           createGodHandler,
+  CREATE_ITEM:          createItemHandler,
+  SPAWN_ITEM:           spawnItemHandler,
+  SPAWN_PREDATOR:       spawnPredatorHandler,
+  KILL_PREDATOR:        killPredatorHandler,
+  DIV_HEAL_FROG:        divineHealFrogHandler,
+  DIV_SMITE_ENEMY:      divineSmiteEnemyHandler,
+  DIV_SPAWN_ITEM:       divineSpawnItemHandler,
+  DIV_SPAWN_PREDATOR:   divineSpawnPredatorHandler,
+  GOD_PAN:              godPanHandler,
+  DIV_UPDATE_LAIR:      divUpdateLairHandler,
+  DIV_PLACE_LAIR:       divPlaceLairHandler,
 };
 
 export const PREDATOR_ACTION_REGISTRY: Record<string, PredatorActionHandler> = {
@@ -81,7 +100,9 @@ export async function runAction(
   ctx.frog = frog;
 
   // Gate 3: validate
-  const validation = await handler.validate(ctx);
+  const _state = new SimulatedState();
+  const _out: UpdateInstruction[] = [];
+  const validation = await handler.validate(ctx, _state);
 
   if (!validation.ok) {
     if (validation.code === "FUMBLE") {
@@ -110,7 +131,7 @@ export async function runAction(
   }
 
   // Execute
-  const result = await handler.execute(ctx);
+  const result = await handler.execute(ctx, _state, _out);
 
   // Broadcast
   await handler.broadcast(ctx, result, notify);

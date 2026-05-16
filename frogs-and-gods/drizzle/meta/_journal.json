@@ -15,6 +15,34 @@
       "when": 1746662400000,
       "tag": "0001_add_pixel_data",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1747180800000,
+      "tag": "0002_add_scale_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1747180900000,
+      "tag": "0003_gods_revamp",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1747267200000,
+      "tag": "0004_instances_and_lairs",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1747353600000,
+      "tag": "0005_drop_party_tables",
+      "breakpoints": true
     }
   ]
 }

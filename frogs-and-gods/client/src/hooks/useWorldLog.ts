@@ -13,14 +13,17 @@ interface UseWorldLogOptions {
   userId?: number;
   godId?: number;
   maxEntries?: number;
+  viewportChunk?: { chunkX: number; chunkY: number };
 }
 
 export function useWorldLog(options: UseWorldLogOptions = {}) {
-  const { role = "spectator", userId, godId, maxEntries = 100 } = options;
+  const { role = "spectator", userId, godId, maxEntries = 100, viewportChunk } = options;
   const [entries, setEntries] = useState<WorldLogPayload[]>([]);
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const viewportRef = useRef(viewportChunk);
+  viewportRef.current = viewportChunk;
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -31,8 +34,10 @@ export function useWorldLog(options: UseWorldLogOptions = {}) {
 
     ws.onopen = () => {
       setConnected(true);
-      // Identify this client
       ws.send(JSON.stringify({ type: "IDENTIFY", role, userId, godId }));
+      if (viewportRef.current) {
+        ws.send(JSON.stringify({ type: "VIEWPORT_UPDATE", ...viewportRef.current }));
+      }
     };
 
     ws.onmessage = (event) => {
@@ -67,6 +72,12 @@ export function useWorldLog(options: UseWorldLogOptions = {}) {
       wsRef.current?.close();
     };
   }, [connect]);
+
+  // Send VIEWPORT_UPDATE whenever the chunk changes (e.g. after a frog moves across a chunk boundary)
+  useEffect(() => {
+    if (!viewportChunk || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ type: "VIEWPORT_UPDATE", ...viewportChunk }));
+  }, [viewportChunk?.chunkX, viewportChunk?.chunkY]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sendIntervention = useCallback(
     (type: "HEAL_FROG" | "SMITE_ENEMY", payload: Record<string, unknown>) => {

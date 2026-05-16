@@ -1,4 +1,4 @@
-class SpriteManager {
+export class SpriteManager {
   private cache = new Map<string, HTMLCanvasElement>();
 
   has(itemId: string): boolean {

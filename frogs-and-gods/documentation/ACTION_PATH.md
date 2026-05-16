@@ -41,13 +41,40 @@ ActionBar.tsx
        └─ createPendingAction({ actorId: frogId, actionType, targetGridX, targetGridY, resolveBucket })
 ```
 
-#### God actions (actorId = 0)
+#### God actions (actorId = 0, system sentinel)
+`admin.createGod` → queues `CREATE_GOD`  
 `admin.createItem` → queues `CREATE_ITEM`  
 `admin.spawnItem` → queues `SPAWN_ITEM`  
 `admin.triggerSpawn` → queues `SPAWN_PREDATOR`  
 `admin.triggerKill` → queues `KILL_PREDATOR`  
 
 All set `actorId = 0` (system sentinel) and `resolveBucket = Math.floor(Date.now() / 500)`.
+
+#### Divine intervention actions (actorId = godId, favor-deducting)
+Used by the God's View tab. `actorId = godId` (positive integer). Favor check happens twice: once at queue time in the endpoint (early rejection) and again at resolution time in `validate()` (re-checks `state.gods` to prevent double-spend).
+
+`admin.submitDivineAction` → maps `powerId → DIV_*` action type:
+- `HEAL_FROG` → queues `DIV_HEAL_FROG` — heals target frog +25 HP, deducts 25 favor
+- `SMITE_ENEMY` → queues `DIV_SMITE_ENEMY` — deals 50 damage to target predator, deducts 25 favor
+- `SPAWN_ITEM` → queues `DIV_SPAWN_ITEM` — places existing item at target tile, deducts 25 favor
+- `SPAWN_PREDATOR` → queues `DIV_SPAWN_PREDATOR` — spawns new predator at target tile, deducts 25 favor
+
+`admin.submitGodPan` → queues `GOD_PAN` — pure event, no favor cost. Camera applies client-side on next ENGINE_TICK.
+
+`admin.getGodVision` → query (not mutation) — returns 3×3 chunk vision data for arbitrary `{ centerChunkX, centerChunkY }` coords. Same return shape as `frog.getPlayerVision`.
+
+#### Lair management actions (actorId = godId)
+
+`admin.stageLairTileData` → validates 16×16 grid with exactly 1 "D", writes to `instance.stagedTileDataJson`, queues `DIV_UPDATE_LAIR`. If no `instanceId` provided, creates a new instance row first.  
+`admin.submitDivPlaceLair` → verifies instance ownership and committed layout, queues `DIV_PLACE_LAIR`.
+
+#### Lair queries (no mutation)
+
+`admin.getLairsByGod` → returns all `instances` rows for a god (including staged/committed status).  
+`admin.getLairEntranceCountForGod` → returns count of existing overworld entrances for a god (used by the UI to show FREE vs 50-favor cost).
+
+#### God resource management (direct DB write)
+`admin.setFavor` → direct `updateGod()` call. Replaces the god's `favor` balance with the given amount.
 
 ### Path B — WebSocket `SUBMIT_ACTION` (Live Gameplay)
 
@@ -108,26 +135,44 @@ setInterval(() => {
 HeartbeatEngine
 │
 ├── setInterval (500ms) ──► emit("subtick")
+│                              │  [skipped if previous tick is still in the Exhale]
 │                              └─► processAllActions()     ← tick processor runs
-│                              └─► flushActionLogs()       ← broadcast SUBTICK_LOGS
-│                              └─► broadcast ENGINE_QUIVER ← 500ms pulse to clients
+│                                    └─► flushActionLogs() ← broadcast SUBTICK_LOGS
+│                                    └─► broadcast ENGINE_QUIVER ← fires AFTER Exhale commits
 │
 └── setTimeout (10_000ms) ─► emit("broadcast")
+                               │  [deferred if a tick is still in-flight]
                                └─► broadcast ENGINE_TICK   ← 10s cycle marker
                                └─► purgeResolvedActions()  ← clean up old rows
                                └─► restarts setTimeout
                                └─► emit("cycle_start")     ← Tick 0: entity AI queues intents
 ```
 
-**ENGINE_QUIVER** — fires every 500ms. Clients use this for sub-tick polling.  
-**ENGINE_TICK** — fires every 10s. Clients use this to refetch world state and unlock UI.  
+**ENGINE_QUIVER** — fires after each subtick's Great Exhale commits. Clients use this as a "tick just finished" signal. If a subtick is skipped (previous still running), no QUIVER is emitted for that interval.  
+**ENGINE_TICK** — fires every 10s, but is deferred until any in-flight tick finishes if needed. Clients use this to refetch world state and unlock UI.  
 **cycle_start** — fires at the top of each new 10s cycle. `socket.ts` listens and calls `processEntityIntents()` so predator AI queues its intents for the coming cycle.
 
-The listener wiring lives in `server/websockets/socket.ts`:
+The listener wiring lives in `server/websockets/socket.ts`. A `tickInFlight` flag prevents re-entry; a `broadcastPending` flag defers ENGINE_TICK if the 10s timer fires during an active exhale:
 ```typescript
-heartbeat.on("subtick",      () => { void processAllActions(emitToUser); });
-heartbeat.on("broadcast",    () => { broadcast({ type: "ENGINE_TICK", ... }); });
-heartbeat.on("cycle_start",  () => { void processEntityIntents(emitToUser); });
+// subtick: skip if previous tick is still running
+heartbeat.on("subtick", () => {
+  if (tickInFlight) return;
+  tickInFlight = true;
+  void processAllActions(emitToUser)
+    .then(() => { /* flush logs + ENGINE_QUIVER */ })
+    .finally(() => {
+      tickInFlight = false;
+      if (broadcastPending) { broadcastPending = false; runEngineBroadcast(); }
+    });
+});
+
+// broadcast: defer ENGINE_TICK until the exhale finishes
+heartbeat.on("broadcast", () => {
+  if (tickInFlight) { broadcastPending = true; return; }
+  runEngineBroadcast(); // broadcast ENGINE_TICK + purge
+});
+
+heartbeat.on("cycle_start", () => { void processEntityIntents(emitToUser); });
 ```
 
 ---
@@ -148,6 +193,28 @@ Before any action handler runs, the processor loads a snapshot of the world into
    - items in bounds + owned     → state.items
    - predators in chunk area     → state.predators
    - chunks in bounding box      → state.chunks
+
+Section A — Instance preload (for DIV_UPDATE_LAIR, DIV_PLACE_LAIR, lair-resident frogs):
+   Collect instanceIds from:
+     (a) god action payloads with an `instanceId` field
+     (b) actor frogs with instanceId !== null (already in state.frogs)
+   For each unique instanceId:
+     getInstancesByIds([...]) → state.instances
+     getFrogsByInstanceId(iid), getPredatorsByInstanceId(iid), getItemsByInstanceId(iid)
+       → merges into state.frogs / state.predators / state.items
+
+Section B — Lair entrance preload (for OPEN_DOOR enter mode):
+   For every overworld frog (instanceId = null, not dead) in state.frogs:
+     getLairEntrancesByGridPositions([frog positions])
+       → state.lairEntrances
+   For each entrance's instanceId not already in state.instances:
+     getInstanceById(iid) → state.instances
+   (Needed so OPEN_DOOR validate can read the committed layout to find the "D" tile coords.)
+
+Section C — DIV_PLACE_LAIR entrance preload:
+   For each god action with actionType === "DIV_PLACE_LAIR":
+     getLairEntrancesByOwnerGodId(godId) → state.lairEntrances
+   (Needed so validate can count existing entrances for this god and determine free vs 50-favor cost.)
 ```
 
 `SimulatedState` is defined in `server/engine/types.ts`. It is an in-memory replica of the relevant DB slice for this tick.
@@ -295,6 +362,7 @@ Each handler's `broadcast()` phase calls `notify(userId, data)`:
 { type: "ACTION_RESOLVED", gridX, gridY }
 { type: "FUMBLE",          message }
 { type: "SWING_RESOLVED",  targetTiles, damaged }
+{ type: "OPEN_DOOR",       mode }   ← "enter" or "exit"; frog owner notified on lair traversal
 ```
 Delivered immediately when the action resolves, before the next ENGINE_TICK.
 
@@ -307,6 +375,15 @@ equipped.refetch()
 pendingFrogs.clear()   // re-enable action buttons
 ```
 This is why the admin UI shows a "waiting for heartbeat" state after submitting an action — buttons stay locked until the 10s cycle confirms the resolved state.
+
+### Viewport Reporting — VIEWPORT_UPDATE (client → server)
+Clients send their current chunk center so the server can spatially filter broadcasts:
+```typescript
+ws.send(JSON.stringify({ type: "VIEWPORT_UPDATE", chunkX, chunkY }));
+```
+- `useActionLogs` sends this on connect and whenever the frog crosses a chunk boundary.
+- `useWorldLog` sends this on connect and when its `viewportChunk` prop changes.
+- Without a known viewport, frog/god clients receive no `WORLD_LOG` or `SUBTICK_LOGS`. Spectator clients receive all events regardless.
 
 ---
 

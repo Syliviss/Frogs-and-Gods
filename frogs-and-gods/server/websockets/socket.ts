@@ -6,7 +6,7 @@ import { heartbeat } from "../engine/heartbeat";
 import { processAllActions } from "../engine/tickProcessor";
 import { processEntityIntents } from "../entities/index";
 import { validateAndQueueMovement } from "../engine/movement";
-import { getFrogByOwnerId, createPendingAction, purgeResolvedActions, purgeDeadFrogs, getDb } from "../db";
+import { getFrogByOwnerId, getFrogById, createPendingAction, purgeResolvedActions, purgeDeadFrogs, purgeOldWorldLogEvents, getDb } from "../db";
 import { flushActionLogs } from "../engine/actionLog";
 import { pendingActions, type InsertPendingAction } from "../../drizzle/schema";
 
@@ -19,6 +19,8 @@ interface GameClient {
   role: "frog" | "god" | "spectator";
   userId?: number;
   godId?: number;
+  viewportChunkX?: number;
+  viewportChunkY?: number;
 }
 
 const clients = new Set<GameClient>();
@@ -38,6 +40,23 @@ function broadcastToGods(data: unknown): void {
     if (client.ws.readyState === WebSocket.OPEN && client.role === "god") {
       client.ws.send(message);
     }
+  }
+}
+
+// Sends only to clients whose 3×3 viewport (±1 chunk) overlaps the event chunk.
+// Spectators with no viewport get all events (admin observers).
+// Frogs and gods with no viewport get nothing — they must send VIEWPORT_UPDATE first.
+function broadcastToChunkArea(eventChunkX: number, eventChunkY: number, data: unknown): void {
+  const message = JSON.stringify(data);
+  for (const client of Array.from(clients)) {
+    if (client.ws.readyState !== WebSocket.OPEN) continue;
+    if (client.viewportChunkX == null || client.viewportChunkY == null) {
+      if (client.role === "spectator") client.ws.send(message);
+      continue;
+    }
+    const dx = Math.abs(client.viewportChunkX - eventChunkX);
+    const dy = Math.abs(client.viewportChunkY - eventChunkY);
+    if (dx <= 1 && dy <= 1) client.ws.send(message);
   }
 }
 
@@ -89,23 +108,75 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
   // ── Subscribe to World Log emitter ──
   const emitter = getWorldLogEmitter();
   emitter.on("worldEvent", (payload: WorldLogPayload) => {
-    broadcast({ type: "WORLD_LOG", payload });
+    if (payload.chunkX != null && payload.chunkY != null) {
+      broadcastToChunkArea(payload.chunkX, payload.chunkY, { type: "WORLD_LOG", payload });
+    } else {
+      broadcast({ type: "WORLD_LOG", payload });
+    }
   });
+
+  // ── Tick sequencing: skip the next subtick if the previous exhale hasn't committed yet.
+  //    If the 10s broadcast arrives while a tick is still running, hold it until the tick finishes.
+  let tickInFlight = false;
+  let broadcastPending = false;
+  let _worldLogPurgeCycle = 0;
+
+  function runEngineBroadcast(): void {
+    broadcast({ type: "ENGINE_TICK", timestamp: Date.now() });
+    void purgeResolvedActions();
+    void purgeDeadFrogs();
+    _worldLogPurgeCycle++;
+    if (_worldLogPurgeCycle >= 1000) {
+      _worldLogPurgeCycle = 0;
+      void purgeOldWorldLogEvents();
+    }
+  }
 
   // ── 500ms engine loop: process pending DB actions ──
   heartbeat.on("subtick", () => {
-    void processAllActions(emitToUser).then(() => {
-      const logs = flushActionLogs();
-      if (logs.length > 0) broadcast({ type: "SUBTICK_LOGS", logs });
-    });
-    broadcast({ type: "ENGINE_QUIVER", timestamp: Date.now() });
+    if (tickInFlight) return;
+    tickInFlight = true;
+
+    void processAllActions(emitToUser)
+      .then(() => {
+        const logs = flushActionLogs();
+        if (logs.length > 0) {
+          const fullMessage = JSON.stringify({ type: "SUBTICK_LOGS", logs });
+          for (const client of Array.from(clients)) {
+            if (client.ws.readyState !== WebSocket.OPEN) continue;
+            if (client.viewportChunkX == null || client.viewportChunkY == null) {
+              if (client.role === "spectator") client.ws.send(fullMessage);
+              continue;
+            }
+            const relevant = logs.filter(log => {
+              const [cx, cy] = log.chunk_id.split(":").map(Number);
+              return Math.abs(cx - client.viewportChunkX!) <= 1
+                  && Math.abs(cy - client.viewportChunkY!) <= 1;
+            });
+            if (relevant.length > 0)
+              client.ws.send(relevant.length === logs.length
+                ? fullMessage
+                : JSON.stringify({ type: "SUBTICK_LOGS", logs: relevant }));
+          }
+        }
+        broadcast({ type: "ENGINE_QUIVER", timestamp: Date.now() });
+      })
+      .finally(() => {
+        tickInFlight = false;
+        if (broadcastPending) {
+          broadcastPending = false;
+          runEngineBroadcast();
+        }
+      });
   });
 
   // ── 10s broadcast: push ENGINE_TICK so clients refetch their vision ──
   heartbeat.on("broadcast", () => {
-    broadcast({ type: "ENGINE_TICK", timestamp: Date.now() });
-    void purgeResolvedActions();
-    void purgeDeadFrogs();
+    if (tickInFlight) {
+      broadcastPending = true;
+      return;
+    }
+    runEngineBroadcast();
   });
 
   // ── Tick 0: entity AI queues intents for the new heartbeat cycle ──
@@ -132,6 +203,13 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
             client.userId = msg.userId;
             client.godId = msg.godId;
             ws.send(JSON.stringify({ type: "IDENTIFIED", role: client.role }));
+            break;
+          }
+
+          // ── Viewport position report — enables spatial broadcast culling ──
+          case "VIEWPORT_UPDATE": {
+            client.viewportChunkX = msg.chunkX;
+            client.viewportChunkY = msg.chunkY;
             break;
           }
 
@@ -203,18 +281,23 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
               ws.send(JSON.stringify({ type: "ERROR", message: "Only Gods can intervene." }));
               break;
             }
-            const healPayload: WorldLogPayload = {
-              encounterId: msg.encounterId,
-              frogId: msg.targetFrogId,
-              frogName: msg.frogName ?? "Unknown Frog",
-              godId: client.godId,
-              godName: msg.godName ?? "A God",
-              eventType: "HEAL_FROG",
-              message: `${msg.godName ?? "A God"} heals ${msg.frogName ?? "a Frog"}!`,
-              heal: msg.healAmount ?? 25,
-              timestamp: Date.now(),
-            };
-            emitter.emitWorldEvent(healPayload);
+            void (async () => {
+              const targetFrog = msg.targetFrogId ? await getFrogById(msg.targetFrogId) : undefined;
+              const healPayload: WorldLogPayload = {
+                encounterId: msg.encounterId,
+                frogId: msg.targetFrogId,
+                frogName: msg.frogName ?? "Unknown Frog",
+                godId: client.godId,
+                godName: msg.godName ?? "A God",
+                eventType: "HEAL_FROG",
+                message: `${msg.godName ?? "A God"} heals ${msg.frogName ?? "a Frog"}!`,
+                heal: msg.healAmount ?? 25,
+                timestamp: Date.now(),
+                chunkX: targetFrog ? Math.floor(targetFrog.gridX / 16) : undefined,
+                chunkY: targetFrog ? Math.floor(targetFrog.gridY / 16) : undefined,
+              };
+              emitter.emitWorldEvent(healPayload);
+            })();
             break;
           }
 
@@ -223,6 +306,8 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
               ws.send(JSON.stringify({ type: "ERROR", message: "Only Gods can intervene." }));
               break;
             }
+            // No spatial target available in smite payload — broadcasts globally.
+            // Add chunkX/chunkY here once the smite target's position is passed by the client.
             const smitePayload: WorldLogPayload = {
               encounterId: msg.encounterId,
               godId: client.godId,

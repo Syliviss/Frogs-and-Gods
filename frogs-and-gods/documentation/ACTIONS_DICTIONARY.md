@@ -24,6 +24,19 @@ tickProcessor.ts
 
 **CRITICAL RULE:** Action handler files must **never** import from `../db`. Read world state from `state`. Write changes via `state.updateX()` and push to `out`. Any action that imports from `../db` breaks the inhale/exhale guarantee and can cause inconsistent tick resolution.
 
+**CRITICAL — Object.assign mutation gotcha:** All `SimulatedState.updateX()` methods use `Object.assign(entity, changes)` — they mutate the existing object **in place**. If you call `state.updateFrog(id, { currentHp: 0 })` and then read `frog.currentHp` (where `frog` is a reference captured earlier), you will see `0`, not the original value. Always capture any field you need **before** calling `state.updateX()` if you plan to use it afterward:
+
+```typescript
+// WRONG — reads null after mutation
+state.updateInstance(id, { tileDataJson: instance.stagedTileDataJson, stagedTileDataJson: null });
+out.push({ changes: { tileDataJson: instance.stagedTileDataJson } });  // stagedTileDataJson is now null!
+
+// CORRECT — capture first, then mutate
+const stagedJson = instance.stagedTileDataJson!;
+state.updateInstance(id, { tileDataJson: stagedJson, stagedTileDataJson: null });
+out.push({ changes: { tileDataJson: stagedJson } });
+```
+
 ---
 
 ## The Action Handler Contract
@@ -253,6 +266,17 @@ Factory function that returns a complete `ActionHandler` for a movement action t
 | **Fumble triggers** | Inventory capacity exceeded (`inventoryCapacity` slots full, default 6). Item's `blockedActions` includes `"PICKUP"`. |
 | **UI** | "PICKUP (N)" dropdown button in ActionBar; populated by `frog.getNearbyGroundItems` query, refreshed on ENGINE_TICK. |
 
+### OPEN_DOOR
+
+| | |
+|--|--|
+| **File** | `server/actions/open_door.ts` |
+| **Type** | traversal |
+| **Distance** | Own tile (no targeting) |
+| **Key rules** | **Mode 1 — Enter (overworld):** Frog must be standing on a `lair_entrances` tile in the overworld (`instanceId = null`). The referenced instance must have a committed `tileDataJson`. Teleports frog to the instance's "D" tile local coords. **Mode 2 — Exit (lair):** Frog must have a non-null `instanceId` and must be standing on the local "D" tile within the lair grid. Teleports frog back to the overworld entrance tile. |
+| **Fumble triggers** | None — fails silently (`ok: false`, no code) if conditions are not met. No turn consumed on silent reject. |
+| **State written** | `FROG_UPDATE { instanceId, gridX, gridY }` — sets or clears `instanceId`, and updates tile coords. |
+
 ### SWING
 
 | | |
@@ -301,6 +325,13 @@ Factory function that returns a complete `ActionHandler` for a movement action t
 
 God actions have no frog actor. They run in Pass 1 (before all other actions) and cannot fumble or consume a player turn.
 
+### CREATE_GOD
+
+| | |
+|--|--|
+| **File** | `server/actions/create_god.ts` |
+| **Key rules** | Inserts a new god row with `userId = null` (admin-created system gods have no user account). `favor` starts at 100. `startingPowers` must be an array of exactly 3 unique IDs from `DIVINE_POWER_LIST` (`shared/divinePowers.ts`). Validates with `CreateGodPayloadSchema`. Queued via `admin.createGod` tRPC mutation. |
+
 ### CREATE_ITEM
 
 | | |
@@ -328,6 +359,125 @@ God actions have no frog actor. They run in Pass 1 (before all other actions) an
 |--|--|
 | **File** | `server/actions/kill_predator.ts` |
 | **Key rules** | Hard-deletes the predator row by ID. Not a combat death — no XP, no loot, no death event. Used for divine removal from the admin panel. |
+
+---
+
+## Divine Intervention Actions (GOD_ACTION_REGISTRY, actorId = godId)
+
+These actions are initiated by a specific god (not the system sentinel). `actorId = godId` (positive integer). Each deducts **25 favor** from the acting god on resolution and increments `totalInterventions`. The god row is pre-loaded into `state.gods` during the Inhale. `godId` is embedded in the action `payload` at queue time (since `GodActionContext` does not expose `actorId` directly).
+
+### DIV_HEAL_FROG
+
+| | |
+|--|--|
+| **File** | `server/actions/divine_heal_frog.ts` |
+| **Favor cost** | 25 |
+| **Key rules** | `payload.targetFrogId` must be a live (non-dead) frog in SimulatedState. Heals +25 HP capped at `statsJson.maxHp`. Queued via `admin.submitDivineAction` with `powerId: "HEAL_FROG"`. |
+| **Validation** | God must have `favor >= 25`. Frog must exist and not be dead. |
+
+### DIV_SMITE_ENEMY
+
+| | |
+|--|--|
+| **File** | `server/actions/divine_smite_enemy.ts` |
+| **Favor cost** | 25 |
+| **Key rules** | `payload.targetPredatorId` must be a predator with `currentHp > 0` in SimulatedState. Deals 50 flat damage — deletes predator row if lethal (pushes `PREDATOR_DELETE`), otherwise pushes `PREDATOR_UPDATE`. |
+| **Validation** | God must have `favor >= 25`. Predator must exist and be alive. |
+
+### DIV_SPAWN_ITEM
+
+| | |
+|--|--|
+| **File** | `server/actions/divine_spawn_item.ts` |
+| **Favor cost** | 25 |
+| **Key rules** | `payload.itemId` (UUID) must be an existing item in SimulatedState (pre-loaded via `godPayloadItemIds` in the Inhale). Places it at `payload.targetX/targetY` in `GROUND` state. Target chunk must exist. Queued via `admin.submitDivineAction` with `powerId: "SPAWN_ITEM"` + `spawnItemTemplateId`. |
+
+### DIV_SPAWN_PREDATOR
+
+| | |
+|--|--|
+| **File** | `server/actions/divine_spawn_predator.ts` |
+| **Favor cost** | 25 |
+| **Key rules** | Inserts a new predator at `payload.gridX/Y`. Validates against `SpawnPredatorPayloadSchema`. Target tile must exist and not be deep water. Queued via `admin.submitDivineAction` with `powerId: "SPAWN_PREDATOR"` + enemy config. |
+
+### GOD_PAN
+
+| | |
+|--|--|
+| **File** | `server/actions/god_pan.ts` |
+| **Favor cost** | 0 |
+| **Key rules** | Pure event — validates god exists and chunk coordinates are within ±312. `execute()` is a no-op; no world state mutated. Logs a "God's gaze shifts" action log entry. Camera update is applied client-side in `GodViewTab` on the next `ENGINE_TICK` via `useTickSync`. Queued via `admin.submitGodPan`. |
+
+---
+
+## Lair Actions (GOD_ACTION_REGISTRY — instanced dungeon system)
+
+Lair actions manage instanced 16×16 dungeon maps owned by gods. Each god can own multiple lairs; frogs enter via `OPEN_DOOR` on the overworld entrance tile.
+
+### DIV_UPDATE_LAIR
+
+| | |
+|--|--|
+| **File** | `server/actions/div_update_lair.ts` |
+| **Favor cost** | 5 favor × number of tiles changed vs committed layout. First save (no committed layout): free (changedTiles = 0 when `tileDataJson` is null). |
+| **Key rules** | Payload: `{ godId, instanceId }`. Tile data is **pre-staged** — the tRPC mutation `admin.stageLairTileData` writes the 16×16 grid to `instance.stagedTileDataJson` before queuing this action. The handler reads `stagedTileDataJson` from `state.instances`, validates it, then promotes it to `tileDataJson` via `INSTANCE_UPDATE`. Grid must be 16×16. Exactly 1 "D" tile required. Cost is 0 if `tileDataJson` is null (first save). |
+| **State written** | `GOD_UPDATE { favor }` (if cost > 0) + `INSTANCE_UPDATE { tileDataJson: stagedJson, stagedTileDataJson: null }` |
+| **Queued via** | `admin.stageLairTileData` (stages data + queues action in one atomic tRPC call) |
+
+#### Full Two-Phase Pipeline
+
+```
+Phase 1 — tRPC stageLairTileData (synchronous, happens immediately on button click):
+  1. Validate 16×16 grid + exactly one "D" tile (Zod refine).
+  2. If no instanceId: INSERT new instances row with stagedTileDataJson = grid JSON.
+     If instanceId given: UPDATE instances SET staged_tile_data_json = grid JSON.
+  3. INSERT pending_actions row: actionType="DIV_UPDATE_LAIR", payload={godId, instanceId},
+     resolveBucket = Math.floor(Date.now() / 500).
+  4. Return { instanceId, pendingActionId } to client.
+
+  DB state: tileDataJson = null, stagedTileDataJson = "<grid JSON>"
+  UI shows:  "⏳ Staged — awaiting next heartbeat"
+
+Phase 2 — Heartbeat Inhale (≤10s later):
+  tickProcessor Inhale Section A collects instanceId from god action payloads,
+  calls getInstancesByIds([instanceId]) → loads Instance into state.instances.
+  The loaded object has stagedTileDataJson = the grid JSON string.
+
+Phase 3 — DIV_UPDATE_LAIR validate():
+  - Reads instance from state.instances. Fails if missing or ownerGodId mismatch.
+  - parseGrid(instance.stagedTileDataJson) — fails if null or not 16×16.
+  - countTile(staged, "D") must equal 1.
+  - Computes changedTiles vs tileDataJson (0 if tileDataJson is null).
+  - Checks god.favor >= cost.
+
+Phase 4 — DIV_UPDATE_LAIR execute():
+  IMPORTANT: capture stagedJson = instance.stagedTileDataJson BEFORE calling
+  state.updateInstance(). SimulatedState.updateInstance() uses Object.assign()
+  which mutates the object in place — reading instance.stagedTileDataJson after
+  the call returns null, causing the INSTANCE_UPDATE to write null to tileDataJson.
+
+  Correct order:
+    const stagedJson = instance.stagedTileDataJson!;   // capture first
+    state.updateInstance(instanceId, { tileDataJson: stagedJson, ... });
+    out.push({ type: "INSTANCE_UPDATE", changes: { tileDataJson: stagedJson, ... } });
+
+Phase 5 — Great Exhale:
+  tx.update(instances).set({ tileDataJson: stagedJson, stagedTileDataJson: null })
+    .where(eq(instances.id, instanceId));
+
+  DB state: tileDataJson = "<grid JSON>", stagedTileDataJson = null
+  UI shows:  "✓ Committed — <time>"
+```
+
+### DIV_PLACE_LAIR
+
+| | |
+|--|--|
+| **File** | `server/actions/div_place_lair.ts` |
+| **Favor cost** | 0 (first entrance for this god); 50 favor (every subsequent placement) |
+| **Key rules** | Payload: `{ godId, instanceId, targetGridX, targetGridY }`. Instance must have a committed `tileDataJson` (layout finalized via DIV_UPDATE_LAIR first). Target tile must be unclaimed (not in `state.lairEntrances`) and not deep water (`≈`). First-vs-repeat detection: counts all existing `lairEntrances` values whose instance's `ownerGodId` matches — loaded during Inhale Section C. |
+| **State written** | `LAIR_ENTRANCE_INSERT { instanceId, gridX, gridY }` + `WORLD_MAP_OVERRIDE_INSERT { gridX, gridY, newChar: "D" }` + `GOD_UPDATE { favor }` (if cost > 0) |
+| **Queued via** | `admin.submitDivPlaceLair` |
 
 ---
 

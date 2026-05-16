@@ -1,24 +1,25 @@
 import { z } from "zod";
 
 // ─────────────────────────────────────────────
-// PARTY INVITES
+// GOD CREATION
 // ─────────────────────────────────────────────
 
-export const PartyInviteSchema = z.object({
-  partyId:       z.number().int().positive(),
-  invitedFrogId: z.number().int().positive(),
-});
-export type PartyInviteInput = z.infer<typeof PartyInviteSchema>;
+export const DivinePowerIdSchema = z.enum([
+  "HEAL_FROG",
+  "SMITE_ENEMY",
+  "SPAWN_ITEM",
+  "SPAWN_PREDATOR",
+]);
+export type DivinePowerId = z.infer<typeof DivinePowerIdSchema>;
 
-export const JoinPartySchema = z.object({
-  inviteId: z.number().int().positive(),
+export const CreateGodPayloadSchema = z.object({
+  name:           z.string().min(1).max(64),
+  startingPowers: z
+    .array(DivinePowerIdSchema)
+    .length(3, "Exactly 3 starting powers required")
+    .refine((arr) => new Set(arr).size === 3, "Starting powers must be unique"),
 });
-export type JoinPartyInput = z.infer<typeof JoinPartySchema>;
-
-export const CreatePartySchema = z.object({
-  name: z.string().min(2).max(64),
-});
-export type CreatePartyInput = z.infer<typeof CreatePartySchema>;
+export type CreateGodPayload = z.infer<typeof CreateGodPayloadSchema>;
 
 // ─────────────────────────────────────────────
 // GOD INTERVENTIONS
@@ -156,7 +157,7 @@ export const SpawnChunkSchema = z.object({
 });
 export type SpawnChunkInput = z.infer<typeof SpawnChunkSchema>;
 
-export const TileCharSchema = z.enum(["≈", "+", "~", "@", "#", "%"]);
+export const TileCharSchema = z.enum(["≈", "+", "~", "@", "#", "%", "D"]);
 export type TileChar = z.infer<typeof TileCharSchema>;
 
 export const WorldMapChunkSchema = z.object({
@@ -381,3 +382,48 @@ export const GetPlayerVisionSchema = z.object({
   frogId: z.number().int().positive(),
 });
 export type GetPlayerVisionInput = z.infer<typeof GetPlayerVisionSchema>;
+
+// ─────────────────────────────────────────────
+// GOD VISION (free-camera admin viewport)
+// ─────────────────────────────────────────────
+
+export const GetGodVisionSchema = z.object({
+  centerChunkX: z.number().int().min(-312).max(312),
+  centerChunkY: z.number().int().min(-312).max(312),
+});
+export type GetGodVisionInput = z.infer<typeof GetGodVisionSchema>;
+
+// ─────────────────────────────────────────────
+// MAP STUDIO (large-canvas screenshot renderer)
+// ─────────────────────────────────────────────
+
+export const GetMapStudioChunksSchema = z.object({
+  centerChunkX: z.number().int().min(-312).max(312),
+  centerChunkY: z.number().int().min(-312).max(312),
+  radius: z.number().int().min(1).max(5),
+});
+export type GetMapStudioChunksInput = z.infer<typeof GetMapStudioChunksSchema>;
+
+export const SubmitDivineActionSchema = z.object({
+  godId:               z.number().int().positive(),
+  powerId:             DivinePowerIdSchema,
+  targetGridX:         z.number().int().optional(),
+  targetGridY:         z.number().int().optional(),
+  targetFrogId:        z.number().int().positive().optional(),
+  targetPredatorId:    z.number().int().positive().optional(),
+  // SPAWN_ITEM extras
+  spawnItemTemplateId: z.string().uuid().optional(),
+  // SPAWN_PREDATOR extras
+  spawnEnemyType:      EnemyTypeSchema.optional(),
+  spawnEnemyAiType:    AiTypeSchema.optional(),
+  spawnEnemyHp:        z.number().int().min(1).max(500).optional(),
+  spawnEnemySpeed:     z.number().int().min(1).max(10).optional(),
+});
+export type SubmitDivineActionInput = z.infer<typeof SubmitDivineActionSchema>;
+
+export const GodPanSchema = z.object({
+  godId:  z.number().int().positive(),
+  chunkX: z.number().int().min(-312).max(312),
+  chunkY: z.number().int().min(-312).max(312),
+});
+export type GodPanInput = z.infer<typeof GodPanSchema>;

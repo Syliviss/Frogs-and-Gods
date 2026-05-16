@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { TILE_REGISTRY } from "../../../shared/tileRegistry";
 import type { TileChar } from "../../../shared/game.schema";
-import { spriteManager } from "../lib/SpriteManager";
+import { spriteManager, SpriteManager } from "../lib/SpriteManager";
 
 const CHUNK_SIZE = 16;
 const TILE_W = 24;
@@ -15,7 +15,7 @@ interface ViewportProps {
   centerChunkX: number;
   centerChunkY: number;
   chunks: Record<string, string[][]>;
-  entities?: { gridX: number; gridY: number; type?: "frog" | "predator" }[];
+  entities?: { gridX: number; gridY: number; type?: "frog" | "predator"; id?: number }[];
   groundItems?: { gridX: number; gridY: number; itemId: string }[];
   selectedTile?: { gridX: number; gridY: number };
   onTileClick?: (gridX: number, gridY: number) => void;
@@ -26,6 +26,8 @@ interface ViewportProps {
   onTileHover?: (gridX: number, gridY: number) => void;
   /** Called on right-click — used to cancel targeting mode */
   onTileRightClick?: () => void;
+  /** Separate sprite cache for frog models — lazily baked, pruned each tick */
+  frogSpriteManager?: SpriteManager;
 }
 
 export function Viewport({
@@ -40,6 +42,7 @@ export function Viewport({
   hoveredTargetTile,
   onTileHover,
   onTileRightClick,
+  frogSpriteManager,
 }: ViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -158,8 +161,13 @@ export function Viewport({
           ctx.fillStyle = "#ff4444";
           ctx.fillText("S", screenX, screenY);
         } else {
-          ctx.fillStyle = "#00ff88";
-          ctx.fillRect(screenX - 4, screenY - 4, 9, 9);
+          const frogSprite = entity.id != null ? frogSpriteManager?.get(String(entity.id)) : undefined;
+          if (frogSprite) {
+            ctx.drawImage(frogSprite, screenX - 9, screenY - 9, 18, 18);
+          } else {
+            ctx.fillStyle = "#00ff88";
+            ctx.fillRect(screenX - 4, screenY - 4, 9, 9);
+          }
         }
       }
     }
@@ -189,7 +197,7 @@ export function Viewport({
     }
   }, [
     centerChunkX, centerChunkY, chunks, entities, groundItems,
-    selectedTile, targetingTiles, hoveredTargetTile,
+    selectedTile, targetingTiles, hoveredTargetTile, frogSpriteManager,
   ]);
 
   return (

@@ -1,0 +1,4 @@
+ALTER TABLE frogs DROP COLUMN IF EXISTS "partyId";
+DROP TABLE IF EXISTS party_invites;
+DROP TABLE IF EXISTS parties;
+DROP TYPE IF EXISTS invite_status;

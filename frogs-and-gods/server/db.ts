@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, inArray, isNotNull, lte, not, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, getTableColumns, gte, inArray, isNotNull, isNull, lte, not, or, sql } from "drizzle-orm";
 import { GOD_ACTION_TYPES } from "./actions/_god_action_types";
 import { PREDATOR_ACTION_TYPES } from "./actions/_predator_action_types";
 import postgres from "postgres";
@@ -7,9 +7,9 @@ import {
   DEFAULT_FROG_STATS,
   frogs,
   gods,
+  instances,
   items,
-  parties,
-  partyInvites,
+  lairEntrances,
   pendingActions,
   predators,
   users,
@@ -20,16 +20,18 @@ import {
   type God,
   type InsertFrog,
   type InsertGod,
+  type InsertInstance,
   type InsertItem,
-  type InsertParty,
+  type InsertLairEntrance,
   type InsertPendingAction,
   type InsertPredator,
   type InsertUser,
   type InsertWorldLogEvent,
   type InsertWorldMapChunk,
   type InsertWorldMapOverride,
+  type Instance,
   type Item,
-  type Party,
+  type LairEntrance,
   type PendingAction,
   type Predator,
   type WorldMapChunk,
@@ -45,7 +47,7 @@ let _db: ReturnType<typeof drizzle> | null = null;
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      const client = postgres(process.env.DATABASE_URL);
+      const client = postgres(process.env.DATABASE_URL, { max: 20, idle_timeout: 30 });
       _db = drizzle(client);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
@@ -138,12 +140,6 @@ export async function updateFrog(
   await db.update(frogs).set(data).where(eq(frogs.id, id));
 }
 
-export async function getFrogsByPartyId(partyId: number): Promise<Frog[]> {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(frogs).where(eq(frogs.partyId, partyId));
-}
-
 export async function getFrogsInBounds(
   minGX: number, maxGX: number,
   minGY: number, maxGY: number,
@@ -151,6 +147,7 @@ export async function getFrogsInBounds(
   const db = await getDb();
   if (!db) return [];
   return db.select().from(frogs).where(and(
+    isNull(frogs.instanceId),
     gte(frogs.gridX, minGX), lte(frogs.gridX, maxGX),
     gte(frogs.gridY, minGY), lte(frogs.gridY, maxGY),
   ));
@@ -190,64 +187,6 @@ export async function updateGod(
 }
 
 // ─────────────────────────────────────────────
-// PARTIES
-// ─────────────────────────────────────────────
-
-export async function createParty(data: InsertParty): Promise<Party> {
-  const db = await getDb();
-  if (!db) throw new Error("Database unavailable");
-  const [party] = await db.insert(parties).values(data).returning();
-  return party!;
-}
-
-export async function getPartyById(id: number): Promise<Party | undefined> {
-  const db = await getDb();
-  if (!db) return undefined;
-  const result = await db.select().from(parties).where(eq(parties.id, id)).limit(1);
-  return result[0] ?? undefined;
-}
-
-export async function createPartyInvite(
-  partyId: number,
-  invitedFrogId: number,
-  invitedByFrogId: number
-): Promise<void> {
-  const db = await getDb();
-  if (!db) throw new Error("Database unavailable");
-  await db.insert(partyInvites).values({ partyId, invitedFrogId, invitedByFrogId });
-}
-
-export async function getPendingInvitesForFrog(frogId: number) {
-  const db = await getDb();
-  if (!db) return [];
-  return db
-    .select()
-    .from(partyInvites)
-    .where(and(eq(partyInvites.invitedFrogId, frogId), eq(partyInvites.status, "pending")));
-}
-
-export async function acceptPartyInvite(inviteId: number, frogId: number): Promise<Party | null> {
-  const db = await getDb();
-  if (!db) throw new Error("Database unavailable");
-
-  const invite = await db
-    .select()
-    .from(partyInvites)
-    .where(and(eq(partyInvites.id, inviteId), eq(partyInvites.invitedFrogId, frogId)))
-    .limit(1);
-
-  if (!invite[0] || invite[0].status !== "pending") return null;
-
-  await db.transaction(async (tx) => {
-    await tx.update(partyInvites).set({ status: "accepted" }).where(eq(partyInvites.id, inviteId));
-    await tx.update(frogs).set({ partyId: invite[0].partyId }).where(eq(frogs.id, frogId));
-  });
-
-  const party = await getPartyById(invite[0].partyId);
-  return party ?? null;
-}
-
-// ─────────────────────────────────────────────
 // WORLD LOG
 // ─────────────────────────────────────────────
 
@@ -265,6 +204,14 @@ export async function getRecentWorldLog(limit = 50) {
     .from(worldLogEvents)
     .orderBy(desc(worldLogEvents.createdAt))
     .limit(limit);
+}
+
+export async function purgeOldWorldLogEvents(): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.execute(
+    sql`DELETE FROM world_log_events WHERE "createdAt" < NOW() - INTERVAL '24 hours'`
+  );
 }
 
 // ─────────────────────────────────────────────
@@ -412,6 +359,16 @@ export async function getOverridesByChunk(chunkX: number, chunkY: number): Promi
     .where(and(eq(worldMapOverrides.chunkX, chunkX), eq(worldMapOverrides.chunkY, chunkY)));
 }
 
+export async function getOverridesByChunks(coords: { chunkX: number; chunkY: number }[]): Promise<WorldMapOverride[]> {
+  if (coords.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(worldMapOverrides)
+    .where(or(...coords.map(c => and(eq(worldMapOverrides.chunkX, c.chunkX), eq(worldMapOverrides.chunkY, c.chunkY))!)));
+}
+
 // ─────────────────────────────────────────────
 // ITEMS (vault — 1-of-1)
 // ─────────────────────────────────────────────
@@ -451,6 +408,7 @@ export async function getItemsInBounds(
   const db = await getDb();
   if (!db) return [];
   return db.select().from(items).where(and(
+    isNull(items.instanceId),
     isNotNull(items.gridX),
     isNotNull(items.gridY),
     gte(items.gridX, minGX), lte(items.gridX, maxGX),
@@ -485,6 +443,16 @@ export async function getItemPixelDataByIds(ids: string[]) {
     .select({ itemId: items.itemId, pixelData: items.pixelData })
     .from(items)
     .where(inArray(items.itemId, ids));
+}
+
+export async function getFrogSpriteDataByIds(ids: number[]) {
+  if (ids.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({ id: frogs.id, modelJson: frogs.modelJson })
+    .from(frogs)
+    .where(inArray(frogs.id, ids));
 }
 
 export async function getEquippedItemsByFrogId(frogId: number): Promise<Item[]> {
@@ -660,7 +628,7 @@ export async function getPredatorsInChunkArea(
   const conditions = coords.map((c) =>
     and(eq(predators.chunkX, c.chunkX), eq(predators.chunkY, c.chunkY))
   );
-  return db.select().from(predators).where(or(...conditions));
+  return db.select().from(predators).where(and(isNull(predators.instanceId), or(...conditions)));
 }
 
 /** Returns all frogs standing on an exact tile. Used by area-of-effect actions (e.g. SWING). */
@@ -741,4 +709,98 @@ export async function getPendingPredatorActions(currentBucket: number): Promise<
       lte(pendingActions.resolveBucket, currentBucket),
       inArray(pendingActions.actionType, [...PREDATOR_ACTION_TYPES]),
     ));
+}
+
+// ─────────────────────────────────────────────
+// INSTANCES
+// ─────────────────────────────────────────────
+
+export async function createInstance(data: InsertInstance): Promise<Instance> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const [row] = await db.insert(instances).values(data).returning();
+  return row!;
+}
+
+export async function getInstanceById(id: number): Promise<Instance | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db.select().from(instances).where(eq(instances.id, id)).limit(1);
+  return row ?? undefined;
+}
+
+export async function getInstancesByOwnerGodId(godId: number): Promise<Instance[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(instances).where(eq(instances.ownerGodId, godId));
+}
+
+export async function getInstancesByIds(ids: number[]): Promise<Instance[]> {
+  if (ids.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(instances).where(inArray(instances.id, ids));
+}
+
+export async function stageInstanceTileData(id: number, stagedJson: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.update(instances).set({ stagedTileDataJson: stagedJson }).where(eq(instances.id, id));
+}
+
+// ─────────────────────────────────────────────
+// LAIR ENTRANCES
+// ─────────────────────────────────────────────
+
+export async function createLairEntrance(data: InsertLairEntrance): Promise<LairEntrance> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const [row] = await db.insert(lairEntrances).values(data).returning();
+  return row!;
+}
+
+export async function getLairEntrancesByInstanceId(instanceId: number): Promise<LairEntrance[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(lairEntrances).where(eq(lairEntrances.instanceId, instanceId));
+}
+
+export async function getLairEntrancesByOwnerGodId(godId: number): Promise<LairEntrance[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select(getTableColumns(lairEntrances))
+    .from(lairEntrances)
+    .innerJoin(instances, eq(lairEntrances.instanceId, instances.id))
+    .where(eq(instances.ownerGodId, godId));
+}
+
+export async function getLairEntrancesByGridPositions(
+  positions: { gridX: number; gridY: number }[],
+): Promise<LairEntrance[]> {
+  if (positions.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = positions.map(p =>
+    and(eq(lairEntrances.gridX, p.gridX), eq(lairEntrances.gridY, p.gridY))
+  );
+  return db.select().from(lairEntrances).where(or(...conditions));
+}
+
+export async function getFrogsByInstanceId(instanceId: number): Promise<Frog[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(frogs).where(eq(frogs.instanceId, instanceId));
+}
+
+export async function getPredatorsByInstanceId(instanceId: number): Promise<Predator[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(predators).where(eq(predators.instanceId, instanceId));
+}
+
+export async function getItemsByInstanceId(instanceId: number): Promise<Item[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(items).where(eq(items.instanceId, instanceId));
 }

@@ -109,6 +109,18 @@ Listed as "upcoming" in old docs. No handler files exist.
 
 ---
 
+## Partially Implemented Features
+
+Features with working prototypes but known missing pieces.
+
+### God's Lair — additional lair purchase flow
+
+- **Implemented:** Schema supports 1:many lairs per god (`instances` table + `lairEntrances`). First lair is created via `admin.stageLairTileData` (no favor cost for layout, free first entrance). `OPEN_DOOR` frog action handles enter/exit traversal.
+- **Unimplemented:** UI flow for a god to purchase a second (or third) lair with favor. The DB schema and isolation logic already handle multiple instances per god; only the purchase/unlock interaction is missing.
+- **Current behavior:** Gods can technically create multiple instances via repeated calls to `stageLairTileData` (no cap enforced server-side). The 50-favor repeat placement gate only applies to `DIV_PLACE_LAIR` (entrance placement), not instance creation itself.
+
+---
+
 ## Ghost Fields in PredatorStats
 
 Fields typed in the `PredatorStats` interface that are never written or read anywhere in the codebase.
@@ -171,11 +183,9 @@ From the deleted `DB_ASSESSMENT_TODO.md`, preserved here.
 
 Columns `ownerId`, `partyId`, and `authorGodId` on several tables lack Drizzle `.references()` constraints. Orphaned records are possible if a referenced row is deleted without cascading cleanup.
 
-### Missing Spatial Indexes
+### ~~Missing Spatial Indexes~~ — Resolved (migration 0002)
 
-`frogs` and `items` tables lack spatial indexes on `(gridX, gridY)`. Queries like `getFrogsInBounds()` and `getItemsInBounds()` do full-table scans. Will degrade as the world grows.
-
-Predators have `(chunkX, chunkY)` indexes — frogs and items don't.
+`frogs(grid_x, grid_y)`, `frogs(ownerId)`, `items(grid_x, grid_y)`, `items(owner_id, item_state)`, `pending_actions(actor_id, status)`, and `world_log_events(createdAt)` indexes were added in May 2026. See `documentation/SCALABILITY_ARCHITECTURE.md` for the full audit.
 
 ### Missing `chunkX` / `chunkY` on Frogs
 
