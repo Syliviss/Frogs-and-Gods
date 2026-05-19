@@ -1,6 +1,6 @@
 export const WORLD_GRID_SIZE = 315;
 export const GRID_RADIUS    = 157;  // (315 - 1) / 2
-export const WOLFRAM_RULE   = 30;
+export const WOLFRAM_RULE   = 54;
 
 const MAX_DIST = Math.sqrt(GRID_RADIUS * GRID_RADIUS + GRID_RADIUS * GRID_RADIUS);
 
@@ -9,7 +9,12 @@ function applyRule(rule: number, left: number, center: number, right: number): n
   return (rule >> pattern) & 1;
 }
 
-export function buildMacroGrid(rule = WOLFRAM_RULE): Uint8Array {
+function lcg(seed: number) {
+  let s = seed >>> 0;
+  return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 0x100000000; };
+}
+
+export function buildMacroGrid(rule = WOLFRAM_RULE, seed = 42): Uint8Array {
   // Build 158 CA rows (row 0 = apex, row 157 = most spread).
   // After each row, mirror right half → left half so the CA evolves symmetrically.
   // Then assemble the 315×315 grid with vertical mirror around row 157 (center).
@@ -17,7 +22,13 @@ export function buildMacroGrid(rule = WOLFRAM_RULE): Uint8Array {
   const rows: Uint8Array[] = [];
 
   let current = new Uint8Array(WORLD_GRID_SIZE);
-  current[GRID_RADIUS] = 1;  // single seed at center column
+  const rng = lcg(seed);
+  for (let col = GRID_RADIUS; col < WORLD_GRID_SIZE; col++) {
+    current[col] = rng() < 0.4 ? 1 : 0;  // 40% fill density on right half
+  }
+  for (let i = 1; i <= GRID_RADIUS; i++) {  // mirror right → left for initial row
+    current[GRID_RADIUS - i] = current[GRID_RADIUS + i];
+  }
   rows.push(new Uint8Array(current));
 
   for (let step = 1; step < rowCount; step++) {
@@ -77,8 +88,14 @@ export function isChunkSolid(cx: number, cy: number, macroGrid: Uint8Array): boo
 
   const caValue = macroGrid[row * WORLD_GRID_SIZE + col];
   const dist    = Math.sqrt(cx * cx + cy * cy) / MAX_DIST;
-  return caValue + dist >= 1.0;
+
+  // Near center, CA weight fades to 0 so even CA=1 cells become void.
+  // Edge term forces the outer ring solid regardless of CA.
+  // CENTER_VOID_RADIUS: tune 0.2–0.5 — larger = bigger void core.
+  const CENTER_VOID_RADIUS = 0.3;
+  const caWeight = Math.min(1.0, dist / CENTER_VOID_RADIUS);
+  return caValue * caWeight + dist * 0.8 >= 0.6;
 }
 
 // Pre-computed singleton — runs once at module load (pure math, no I/O, ~97 KB).
-export const MACRO_GRID = buildMacroGrid(WOLFRAM_RULE);
+export const MACRO_GRID = buildMacroGrid(WOLFRAM_RULE, 42);

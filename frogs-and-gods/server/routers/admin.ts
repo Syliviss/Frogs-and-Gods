@@ -2,7 +2,6 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { publicProcedure, router } from "../_core/trpc";
 import {
-  createFrog,
   createInstance,
   createPendingAction,
   createUserWithOpenId,
@@ -13,6 +12,7 @@ import {
   getFrogById,
   getFrogsInBounds,
   getGodById,
+  getRandomFrogPosition,
   getInstanceById,
   getInstancesByOwnerGodId,
   getInventoryItemsByFrogId,
@@ -36,8 +36,6 @@ import {
   updateGod,
 } from "../db";
 import { POI_REGISTRY } from "../worldgen/index";
-import { generateFrogPixelData } from "../assets/frogModels";
-import type { FrogStats } from "../../drizzle/schema";
 import { xpToNextLevel } from "../engine/xpDistributor";
 import {
   ActionSchemaSchema,
@@ -54,19 +52,9 @@ import {
   SpawnItemPayloadSchema,
   SpawnPredatorPayloadSchema,
   SubmitDivineActionSchema,
-  type FrogSpecies,
 } from "../../shared/game.schema";
 import { validateAndQueueMovement } from "../engine/movement";
 import { chebyshevDistance } from "../../shared/movement";
-
-const SPECIES_MODIFIERS: Record<FrogSpecies, Partial<FrogStats>> = {
-  BULL_FROG:        { str: 1, maxHp: 1 },
-  TREE_FROG:        { dex: 2 },
-  SHAMEN_FROG:      { maxMana: 1, int: 1 },
-  OLD_FROG:         { maxHp: -2, str: -2, wis: 3, maxMana: 2 },
-  GUIRO_FROG:       { cha: 4 },
-  POISON_DART_FROG: {},
-};
 import { generateChunk, MACRO_GRID, WORLD_SEED } from "../worldgen/index";
 
 // ─────────────────────────────────────────────
@@ -97,40 +85,34 @@ export const adminRouter = router({
     return listAllFrogs();
   }),
 
+  getRandomFrogChunk: publicProcedure.query(async () => {
+    const frog = await getRandomFrogPosition();
+    if (!frog) return null;
+    return {
+      chunkX: Math.floor(frog.gridX / 16),
+      chunkY: Math.floor(frog.gridY / 16),
+    };
+  }),
+
   createTestFrog: publicProcedure
     .input(CreateFrogSchema)
     .mutation(async ({ input }) => {
       const openId  = `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const ownerId = await createUserWithOpenId(openId, `TestUser_${input.name}`);
 
-      const mods = SPECIES_MODIFIERS[input.species];
-      const base = input.distributedStats;
-      const finalStats: FrogStats = {
-        maxHp:               Math.max(1, base.maxHp   + (mods.maxHp   ?? 0)),
-        maxMana:             Math.max(1, base.maxMana  + (mods.maxMana ?? 0)),
-        str:                 Math.max(1, base.str      + (mods.str     ?? 0)),
-        dex:                 Math.max(1, base.dex      + (mods.dex     ?? 0)),
-        wis:                 Math.max(1, base.wis      + (mods.wis     ?? 0)),
-        int:                 Math.max(1, base.int      + (mods.int     ?? 0)),
-        cha:                 Math.max(1, base.cha      + (mods.cha     ?? 0)),
-        inventoryCapacity:   6,
-        equipCapacity:       3,
-        equippedAttackBonus: 0,
-        equippedDefenseBonus: 0,
-        equippedHpBonus:     0,
-      };
-
-      await createFrog({
-        ownerId,
-        name:        input.name,
-        gridX:       0,
-        gridY:       0,
-        statsJson:   finalStats,
-        currentHp:   finalStats.maxHp,
-        currentMana: finalStats.maxMana,
-        modelJson:   generateFrogPixelData(input.species),
+      await createPendingAction({
+        actorId:       0,
+        actionType:    "CREATE_FROG",
+        resolveBucket: Math.floor(Date.now() / 500),
+        payload:       {
+          userId:          ownerId,
+          name:            input.name,
+          species:         input.species,
+          distributedStats: input.distributedStats,
+          lairInstanceId:  input.lairInstanceId ?? null,
+        },
       });
-      return { success: true, openId };
+      return { queued: true, openId };
     }),
 
   grantXp: publicProcedure

@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Viewport } from "@/components/Viewport";
+import { useState, useEffect, useRef } from "react";
+import { Viewport, type FloatingText } from "@/components/Viewport";
 import { ActionBar } from "@/components/ActionBar";
 import { ActionLog } from "@/components/ActionLog";
 import { trpc } from "@/lib/trpc";
@@ -7,6 +7,7 @@ import { useTickSync } from "@/hooks/useTickSync";
 import { useActionLogs } from "@/hooks/useActionLogs";
 import { useEquippedActionBar } from "@/hooks/useEquippedActionBar";
 import { getTileDef } from "../../../shared/tileRegistry";
+import type { ActionLogEntry } from "../../../shared/game.schema";
 import { spriteManager, SpriteManager } from "@/lib/SpriteManager";
 
 const frogSpriteManager = new SpriteManager();
@@ -55,50 +56,28 @@ export default function GamePage() {
     onSuccess: () => setLockedIn(true),
   });
 
-  // Lazy sprite fetch: only request pixel data for item IDs not yet in the cache
-  const newItemIds = (vision?.items ?? [])
-    .map(i => i.itemId)
-    .filter(id => !spriteManager.has(id));
-
-  const pixelDataQuery = trpc.frog.getItemPixelData.useQuery(
-    { itemIds: newItemIds },
-    { enabled: newItemIds.length > 0 },
-  );
+  const [spriteVersion, setSpriteVersion] = useState(0);
+  const [floatingTexts, setFloatingTexts] = useState<FloatingText[]>([]);
+  const prevLogsRef = useRef<ActionLogEntry[]>([]);
 
   useEffect(() => {
-    if (!pixelDataQuery.data) return;
-    for (const { itemId, pixelData } of pixelDataQuery.data) {
-      if (pixelData) spriteManager.bake(itemId, pixelData);
+    if (!vision) return;
+    for (const f of vision.frogs) {
+      if (f.modelJson) frogSpriteManager.bake(String(f.id), f.modelJson);
     }
-  }, [pixelDataQuery.data]);
-
-  // Lazy frog sprite fetch: mirrors item sprite pattern, separate cache to avoid ID collisions
-  const newFrogIds = (vision?.frogs ?? [])
-    .map(f => f.id)
-    .filter(id => !frogSpriteManager.has(String(id)));
-
-  const frogSpriteQuery = trpc.frog.getFrogSpriteData.useQuery(
-    { frogIds: newFrogIds },
-    { enabled: newFrogIds.length > 0 },
-  );
-
-  useEffect(() => {
-    if (!frogSpriteQuery.data) return;
-    for (const { id, modelJson } of frogSpriteQuery.data) {
-      if (modelJson) frogSpriteManager.bake(String(id), modelJson);
+    for (const i of vision.items) {
+      if (i.pixelData) spriteManager.bake(i.itemId, i.pixelData);
     }
-  }, [frogSpriteQuery.data]);
+    frogSpriteManager.prune(new Set(vision.frogs.map(f => String(f.id))));
+    spriteManager.prune(new Set(vision.items.map(i => i.itemId)));
+    setSpriteVersion(v => v + 1);
+  }, [vision]);
 
   useTickSync(() => {
     void visionQuery.refetch().then(result => {
       if (!result.data || !selectedFrogId) return;
       const vf = result.data.frogs.find(f => f.id === selectedFrogId);
       if (vf) setFrogPos({ gridX: vf.gridX, gridY: vf.gridY });
-      const groundIds = (result.data.items ?? []).map(i => i.itemId);
-      const heldIds   = (inventoryQuery.data ?? []).map(i => i.itemId);
-      spriteManager.prune(new Set([...groundIds, ...heldIds]));
-      const visibleFrogIds = new Set((result.data.frogs ?? []).map(f => String(f.id)));
-      frogSpriteManager.prune(visibleFrogIds);
     });
     void frogsQuery.refetch();
     void inventoryQuery.refetch();
@@ -110,6 +89,18 @@ export default function GamePage() {
     frogPos?.gridX ?? playerFrog?.gridX ?? null,
     frogPos?.gridY ?? playerFrog?.gridY ?? null,
   );
+
+  useEffect(() => {
+    const prev = prevLogsRef.current;
+    const newLogs = actionLogs.filter(l => !prev.includes(l) && l.text.includes("croaks!"));
+    prevLogsRef.current = actionLogs;
+    if (newLogs.length === 0) return;
+    const now = Date.now();
+    setFloatingTexts(cur => [
+      ...cur.filter(t => now - t.createdAt < 1000),
+      ...newLogs.map(l => ({ gridX: l.x, gridY: l.y, text: "croak!", createdAt: now })),
+    ]);
+  }, [actionLogs]);
 
   const effectivePos = frogPos ?? playerFrog;
   const centerChunkX = effectivePos ? Math.floor(effectivePos.gridX / CHUNK_SIZE) : 0;
@@ -131,7 +122,13 @@ export default function GamePage() {
     : undefined;
   const tileDef = targetChar ? getTileDef(targetChar) : undefined;
 
-  const handleMove = (actionType: "STEP" | "HOP") => {
+  const lairEntranceQuery = trpc.frog.getLairEntranceAtTile.useQuery(
+    { gridX: selectedTile?.gridX ?? 0, gridY: selectedTile?.gridY ?? 0 },
+    { enabled: targetChar === "D" && selectedTile != null },
+  );
+  const selectedLairEntrance = targetChar === "D" ? lairEntranceQuery.data : undefined;
+
+  const handleMove = (actionType: "STEP" | "HOP" | "SWIM") => {
     if (!selectedFrogId || !selectedTile) return;
     submitMovement.mutate({
       frogId:      selectedFrogId,
@@ -144,6 +141,11 @@ export default function GamePage() {
   const handlePickup = () => {
     if (!selectedFrogId || !selectedTile) return;
     submitAction.mutate({ frogId: selectedFrogId, actionType: "PICKUP", targetGridX: selectedTile.gridX, targetGridY: selectedTile.gridY });
+  };
+
+  const handleCroak = () => {
+    if (!selectedFrogId) return;
+    submitAction.mutate({ frogId: selectedFrogId, actionType: "CROAK" });
   };
 
   if (!selectedFrogId) {
@@ -188,6 +190,7 @@ export default function GamePage() {
         entities={entities}
         groundItems={groundItems}
         frogSpriteManager={frogSpriteManager}
+        spriteVersion={spriteVersion}
         selectedTile={equippedActionBar.targetingMode ? undefined : (selectedTile ?? undefined)}
         onTileClick={(gridX, gridY) => {
           if (equippedActionBar.targetingMode) {
@@ -200,6 +203,7 @@ export default function GamePage() {
         hoveredTargetTile={equippedActionBar.targetingMode ? (equippedActionBar.hoveredTile ?? undefined) : undefined}
         onTileHover={equippedActionBar.targetingMode ? equippedActionBar.handleTileHover : undefined}
         onTileRightClick={equippedActionBar.targetingMode ? equippedActionBar.cancelTargeting : undefined}
+        floatingTexts={floatingTexts}
       />
 
       <ActionLog logs={actionLogs} />
@@ -213,9 +217,11 @@ export default function GamePage() {
         onMove={handleMove}
         onAction={equippedActionBar.onAction}
         onPickup={handlePickup}
+        onCroak={handleCroak}
         onCancelTarget={equippedActionBar.onCancelTarget}
         error={submitMovement.error?.message ?? submitAction.error?.message ?? equippedActionBar.error}
         tileDef={tileDef}
+        lairInstanceId={selectedLairEntrance?.instanceId ?? null}
       />
     </div>
   );

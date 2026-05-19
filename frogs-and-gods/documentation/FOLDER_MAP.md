@@ -38,7 +38,7 @@ Navigational reference for the project. Every folder and notable file, one line 
 | File | Purpose |
 |------|---------|
 | `Viewport.tsx` | HTML5 Canvas isometric renderer — 3×3 chunk view, click detection, item + frog sprite overlay, `frogSpriteManager` prop |
-| `ActionBar.tsx` | Action button row — STEP/HOP/PICKUP dropdown/item-granted actions, TARGETING mode UI for SWING |
+| `ActionBar.tsx` | Action button row — STEP/HOP/PICKUP/CROAK universal buttons, item-granted actions, TARGETING mode UI for SWING; `onCroak` prop dispatches CROAK action |
 | `ActionLog.tsx` | Scrolling feed of resolved action events |
 | `ErrorBoundary.tsx` | React error boundary for crash isolation |
 
@@ -82,7 +82,7 @@ Navigational reference for the project. Every folder and notable file, one line 
 | File | Purpose |
 |------|---------|
 | `trpc.ts` | tRPC React client setup — `createTRPCReact<AppRouter>()`, httpBatchLink to `/api/trpc` |
-| `SpriteManager.ts` | Sprite loader/cache (exported class + default `spriteManager` singleton) — converts pixel_data/modelJson arrays to baked Canvas elements; used for both items and frogs |
+| `SpriteManager.ts` | Exported `SpriteManager` class + default `spriteManager` singleton — bakes pixel_data/modelJson arrays into off-screen HTMLCanvasElements; two instances used (one for items, one for frogs) to avoid ID collisions |
 | `utils.ts` | Tailwind class merge utility (cn) |
 
 ### `client/src/pages/`
@@ -90,8 +90,8 @@ Navigational reference for the project. Every folder and notable file, one line 
 | File | Purpose |
 |------|---------|
 | `Admin.tsx` | Dev console — tabbed UI: Users, Frogs, Gods, God's View, World, Vision, Items, Inventory, Enemies, God's Lair, WorldLog, Engine |
-| `GamePage.tsx` | Player-facing game view (functional but not yet live — see `THE_VOID_INVENTORY.md`) |
-| `FrogCreationForm.tsx` | Character creation — name, species, stat distribution |
+| `GamePage.tsx` | Player-facing game view (functional but not yet live — see `THE_VOID_INVENTORY.md`); queries `frog.getLairEntranceAtTile` to show lair `instanceId` in the ActionBar when a D tile is selected |
+| `FrogCreationForm.tsx` | Character creation — lair selection step (5 random god lairs via `frog.getRandomLairs`), name/species/stat distribution, async "Hatching..." state that polls ENGINE_TICK / SUBTICK_LOGS |
 | `NotFound.tsx` | 404 page |
 | `TestingGround.tsx` | Dev scratch page — linked from admin UX dropdown |
 | `MapStudio.tsx` | Developer screenshot tool — large configurable isometric ASCII map canvas, PNG export; linked from admin UX dropdown |
@@ -127,7 +127,8 @@ Every action handler lives here. The central registry is `index.ts`.
 | File | Purpose |
 |------|---------|
 | `_types.ts` | `ActionHandler` interface, `ActionContext`, `checkItemFumble()` utility |
-| `_utils.ts` | Shared utilities: `getEntitiesAt()`, `applyDamage()` |
+| `_utils.ts` | Shared utilities: `getTerrainAt()`, `getEntitiesAt()`, `applyDamage()` |
+| `_spawnUtils.ts` | Spawn tile helpers: `findSpawnTileNearLair()`, `pickRandomMapEdgeTile()`, `calcMaxBreath(dex)` (dex → breath formula) |
 | `_conditionUtils.ts` | `rollConditionCheck()` — on-demand condition evaluation (WRAP escape, etc.) |
 | `_moveHelper.ts` | `validateMove()` — shared movement validation used by STEP and HOP |
 | `_god_action_types.ts` | `GOD_ACTION_TYPES` constant |
@@ -144,6 +145,8 @@ Every action handler lives here. The central registry is `index.ts`.
 | `throw.ts` | THROW — throw item to ground (range 3) |
 | `swing.ts` | SWING — multi-tile melee AoE via Generic Intent Builder |
 | `pickup.ts` | PICKUP — pick up a GROUND item into inventory (Chebyshev 1 range) |
+| `croak.ts` | CROAK — universal frog action: reset `currentBreath` to `maxBreath` (always succeeds) |
+| `create_frog.ts` | CREATE_FROG — god action: async frog creation routed through pipeline; spawns near lair water tile or at world edge |
 | `create_god.ts` | CREATE_GOD — god action: insert a new god row with name + 3 starting powers |
 | `create_item.ts` | CREATE_ITEM — god action: create item in VOID state |
 | `spawn_item.ts` | SPAWN_ITEM — god action: place item at world coords |
@@ -282,6 +285,7 @@ Standalone scripts. **Not included in `tsconfig.json`** — run with `npx tsx sc
 | File | Purpose |
 |------|---------|
 | `seedWorld.ts` | Full 315×315 chunk world seeder (−157..157, 99,225 chunks). Upserts in batches of 500. Supports `--dry-run`. |
+| `backfillFrogSprites.ts` | One-time backfill — sets `model_json` to the BULL_FROG sprite for any frog row with `model_json IS NULL`. Run with `npx tsx scripts/backfillFrogSprites.ts`. |
 
 ---
 

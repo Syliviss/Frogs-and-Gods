@@ -73,7 +73,7 @@ export const CHUNK_SIZE    = 16;   // tiles per chunk side
 export const WORLD_SEED    = 42;   // global seed
 export const WORLD_GRID_SIZE = 315;  // chunks per world axis
 export const GRID_RADIUS   = 157;  // chunks from center to edge
-export const WOLFRAM_RULE  = 30;   // Wolfram ECA rule number (tunable)
+export const WOLFRAM_RULE  = 54;   // Wolfram ECA rule number (tunable)
 ```
 
 ---
@@ -104,9 +104,10 @@ dist = sqrt(cx² + cy²) / sqrt(157² + 157²)  // 0.0 at center, 1.0 at corners
 ### Verdict
 
 ```ts
+const SOLID_THRESHOLD = 0.6;  // lower = more solid chunks; tune 0.55–0.65
 density = ca_value + dist
-// density >= 1.0 → SOLID (proceed to tile generation)
-// density <  1.0 → VOID  (store biome="void", terrainDataJson=null)
+// density >= SOLID_THRESHOLD → SOLID (proceed to tile generation)
+// density <  SOLID_THRESHOLD → VOID  (store biome="void", terrainDataJson=null)
 ```
 
 The pre-computed `MACRO_GRID` singleton is a `Uint8Array` of 99,225 bytes computed at module load time.
@@ -139,6 +140,16 @@ export interface BiomeDef {
 
 Biome assignment: a second Perlin noise layer at frequency 0.015 (very low → large regions) is sampled at chunk coordinates. This produces smooth, continent-like biome boundaries.
 
+Breakpoint distribution (noise value → biome):
+
+| Range       | Biome     | Coverage |
+|-------------|-----------|----------|
+| 0.00 – 0.90 | swamp     | ~90%     |
+| 0.90 – 0.96 | mountain  |  ~6%     |
+| 0.96 – 0.98 | grassland |  ~2%     |
+| 0.98 – 0.99 | forest    |  ~1%     |
+| 0.99 – 1.00 | desert    |  ~1%     |
+
 ---
 
 ## 5. Layer 3 — Tile Resolver + Lily Pads
@@ -147,12 +158,17 @@ Biome assignment: a second Perlin noise layer at frequency 0.015 (very low → l
 
 All biomes use the same 5-character tile set (`≈ + ~ # %`). No new tile characters were introduced — biomes differ only in their water/shore/river thresholds. The `@` character is retired from generation (kept in the schema for backward compat with any pre-overhaul DB rows).
 
-**Lily pad `%` placement** — deterministic hash, ~2 per chunk in deep water only:
-```ts
-const h = ((worldX * 73856 + worldY * 31337 + seed) % 256 + 256) % 256;
-if (noise < biome.waterThreshold && h < 2) return "%";
-```
-The double-modulo handles JS negative modulo for negative world coordinates.
+**Lily pad `@` placement** — chunk-level post-pass in `scatterLilyPads()` (called between tile resolution and POI stamping). After the base grid is built, all `≈` tiles are collected, and a seeded LCG picks a count from a water-density-weighted table:
+
+| Water tile % | Count range | Modal count |
+|--------------|-------------|-------------|
+| 0%           | 0           | 0           |
+| 1–10%        | 0–1         | 0           |
+| 11–30%       | 0–4         | 1 (4 rare)  |
+| 31–60%       | 0–4         | 2           |
+| 61–100%      | 1–5         | 3           |
+
+Positions are chosen via Fisher-Yates shuffle (same seeded LCG), so placement is fully deterministic given `chunkX`, `chunkY`, and `seed`. The old `%` char is kept in the schema and tile registry for backward compatibility with pre-bake DB rows.
 
 ---
 

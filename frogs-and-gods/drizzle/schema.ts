@@ -49,6 +49,7 @@ export type InsertUser = typeof users.$inferInsert;
 export interface FrogStats {
   maxHp:               number;
   maxMana:             number;
+  maxBreath:           number;
   str:                 number;
   dex:                 number;
   wis:                 number;
@@ -66,6 +67,7 @@ export interface FrogStats {
 export const DEFAULT_FROG_STATS: FrogStats = {
   maxHp:               100,
   maxMana:             50,
+  maxBreath:           5,
   str:                 10,
   dex:                 10,
   wis:                 10,
@@ -87,6 +89,7 @@ export const frogs = pgTable("frogs", {
   xpToNextLevel:    integer("xp_to_next_level").default(100).notNull(),
   currentHp:        integer("current_hp").default(100).notNull(),
   currentMana:      integer("current_mana").default(50).notNull(),
+  currentBreath:    integer("current_breath").default(5).notNull(),
   /** e.g. "healthy" | "poisoned" | "stunned" | "cursed" | "blessed".
    *  NOTE: This column is reserved for future condition display but is NOT currently
    *  read by any action handler. Active conditions are stored in statsJson (e.g. wrappedBy).

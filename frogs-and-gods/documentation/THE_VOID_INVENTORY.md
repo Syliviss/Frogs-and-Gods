@@ -90,9 +90,10 @@ They are admin-only and low-priority — they don't affect game integrity in nor
 | `admin` | `resurrectFrog` | Direct `updateFrog()` call |
 | `admin` | `setDivinePower` | Direct `updateGod()` call |
 | `admin` | `spawnChunk` | Direct `createWorldMapChunk()` call |
-| `admin` | `createTestFrog` | Direct `createFrog()` call |
 
 Migration path for each: wrap in a god action handler and queue via `pending_actions` with `actorId = 0`.
+
+Note: `admin.createTestFrog` was migrated — it now queues `CREATE_FROG` through the pipeline (actorId=0, userId in payload).
 
 ---
 

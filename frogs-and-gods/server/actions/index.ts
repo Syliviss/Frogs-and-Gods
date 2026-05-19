@@ -4,6 +4,7 @@ import { getFrogById, hasFrogActedThisHeartbeat, createPendingAction } from "../
 import { pushActionLog } from "../engine/actionLog";
 import { stepHandler } from "./step";
 import { hopHandler } from "./hop";
+import { swimHandler } from "./swim";
 import { equipHandler } from "./equip";
 import { unequipHandler } from "./unequip";
 import { throwHandler } from "./throw";
@@ -16,6 +17,7 @@ import { spawnItemHandler } from "./spawn_item";
 import { spawnPredatorHandler } from "./spawn";
 import { killPredatorHandler } from "./kill_predator";
 import { createGodHandler } from "./create_god";
+import { createFrogHandler } from "./create_frog";
 import { divineHealFrogHandler } from "./divine_heal_frog";
 import { divineSmiteEnemyHandler } from "./divine_smite_enemy";
 import { divineSpawnItemHandler } from "./divine_spawn_item";
@@ -24,6 +26,7 @@ import { godPanHandler } from "./god_pan";
 import { divUpdateLairHandler } from "./div_update_lair";
 import { divPlaceLairHandler } from "./div_place_lair";
 import { openDoorHandler } from "./open_door";
+import { croakHandler } from "./croak";
 import { slitherHandler } from "./slither";
 import { strikeHandler } from "./strike";
 import { wrapHandler } from "./wrap";
@@ -41,6 +44,7 @@ export { PREDATOR_ACTION_TYPES } from "./_predator_action_types";
 const ACTION_REGISTRY: Record<string, ActionHandler> = {
   STEP:       stepHandler,
   HOP:        hopHandler,
+  SWIM:       swimHandler,
   EQUIP:      equipHandler,
   UNEQUIP:    unequipHandler,
   THROW:      throwHandler,
@@ -49,10 +53,12 @@ const ACTION_REGISTRY: Record<string, ActionHandler> = {
   SWING:      swingHandler,
   PICKUP:     pickupHandler,
   OPEN_DOOR:  openDoorHandler,
+  CROAK:      croakHandler,
 };
 
 export const GOD_ACTION_REGISTRY: Record<string, GodActionHandler> = {
   CREATE_GOD:           createGodHandler,
+  CREATE_FROG:          createFrogHandler,
   CREATE_ITEM:          createItemHandler,
   SPAWN_ITEM:           spawnItemHandler,
   SPAWN_PREDATOR:       spawnPredatorHandler,

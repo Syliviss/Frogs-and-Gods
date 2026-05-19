@@ -140,6 +140,17 @@ export async function updateFrog(
   await db.update(frogs).set(data).where(eq(frogs.id, id));
 }
 
+export async function getRandomFrogPosition(): Promise<{ gridX: number; gridY: number } | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db
+    .select({ gridX: frogs.gridX, gridY: frogs.gridY })
+    .from(frogs)
+    .orderBy(sql`random()`)
+    .limit(1);
+  return row ?? null;
+}
+
 export async function getFrogsInBounds(
   minGX: number, maxGX: number,
   minGY: number, maxGY: number,
@@ -443,16 +454,6 @@ export async function getItemPixelDataByIds(ids: string[]) {
     .select({ itemId: items.itemId, pixelData: items.pixelData })
     .from(items)
     .where(inArray(items.itemId, ids));
-}
-
-export async function getFrogSpriteDataByIds(ids: number[]) {
-  if (ids.length === 0) return [];
-  const db = await getDb();
-  if (!db) return [];
-  return db
-    .select({ id: frogs.id, modelJson: frogs.modelJson })
-    .from(frogs)
-    .where(inArray(frogs.id, ids));
 }
 
 export async function getEquippedItemsByFrogId(frogId: number): Promise<Item[]> {
@@ -803,4 +804,39 @@ export async function getItemsByInstanceId(instanceId: number): Promise<Item[]> 
   const db = await getDb();
   if (!db) return [];
   return db.select().from(items).where(eq(items.instanceId, instanceId));
+}
+
+// ─────────────────────────────────────────────
+// FROG CREATION HELPERS
+// ─────────────────────────────────────────────
+
+export async function getFrogsByOwnerId(ownerId: number): Promise<Frog[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(frogs).where(and(eq(frogs.ownerId, ownerId), eq(frogs.isDead, false)));
+}
+
+export async function getRandomGodLairs(count: number): Promise<Array<{
+  instanceId:    number;
+  entranceGridX: number;
+  entranceGridY: number;
+  godName:       string;
+  godFavor:      number;
+}>> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      instanceId:    lairEntrances.instanceId,
+      entranceGridX: lairEntrances.gridX,
+      entranceGridY: lairEntrances.gridY,
+      godName:       gods.name,
+      godFavor:      gods.favor,
+    })
+    .from(lairEntrances)
+    .innerJoin(instances, eq(lairEntrances.instanceId, instances.id))
+    .innerJoin(gods, eq(instances.ownerGodId, gods.id))
+    .orderBy(sql`random()`)
+    .limit(count);
+  return rows;
 }

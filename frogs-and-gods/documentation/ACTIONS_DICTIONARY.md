@@ -266,6 +266,18 @@ Factory function that returns a complete `ActionHandler` for a movement action t
 | **Fumble triggers** | Inventory capacity exceeded (`inventoryCapacity` slots full, default 6). Item's `blockedActions` includes `"PICKUP"`. |
 | **UI** | "PICKUP (N)" dropdown button in ActionBar; populated by `frog.getNearbyGroundItems` query, refreshed on ENGINE_TICK. |
 
+### CROAK
+
+| | |
+|--|--|
+| **File** | `server/actions/croak.ts` |
+| **Type** | frog (universal) |
+| **Distance** | Self — no tile target required |
+| **Key rules** | Always succeeds. Resets `currentBreath` to `maxBreath` (from `statsJson`). Falls back to 5 if `maxBreath` is absent (legacy rows). Universal — no equipment required. |
+| **Fumble triggers** | None. |
+| **State written** | `FROG_UPDATE { currentBreath }` |
+| **UI** | "CROAK" button in ActionBar universal row (teal border). |
+
 ### OPEN_DOOR
 
 | | |
@@ -324,6 +336,16 @@ Factory function that returns a complete `ActionHandler` for a movement action t
 ## God Actions (GOD_ACTION_REGISTRY, actorId = 0)
 
 God actions have no frog actor. They run in Pass 1 (before all other actions) and cannot fumble or consume a player turn.
+
+### CREATE_FROG
+
+| | |
+|--|--|
+| **File** | `server/actions/create_frog.ts` |
+| **Key rules** | Queued via `frog.create` tRPC mutation (actorId=0, userId in payload). Optionally takes a `lairInstanceId` — if provided, the frog spawns within 5 tiles of the closest `≈` tile near the lair entrance (see `_spawnUtils.ts`). If no lair given, the frog spawns at a deterministic world-edge tile derived from the userId hash. Validates that the user has no existing living frog in `state.frogs`. Applies species stat modifiers, generates a sprite via `generateFrogPixelData(species)`, pushes a `FROG_INSERT` UpdateInstruction. |
+| **Inhale** | Section D: loads user's existing frogs via `getFrogsByOwnerId`; if `lairInstanceId` given, loads lair entrance + 15-tile neighborhood chunks; otherwise loads edge tile chunk. |
+| **Broadcast** | On success: pushActionLog. On failure: pushActionLog + `notify(userId, { type: "CREATE_FROG_FAILED", reason })`. |
+| **Fumble** | No fumble (god action — no turn to consume). Validation failure → ACTION_CANCEL + `CREATE_FROG_FAILED` WS message. |
 
 ### CREATE_GOD
 

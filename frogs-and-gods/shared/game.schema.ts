@@ -131,9 +131,10 @@ export const FrogStatsDistributionSchema = z.object({
 export type FrogStatsDistribution = z.infer<typeof FrogStatsDistributionSchema>;
 
 export const CreateFrogSchema = z.object({
-  name:             z.string().min(2).max(64),
-  species:          FrogSpeciesSchema,
+  name:            z.string().min(2).max(64),
+  species:         FrogSpeciesSchema,
   distributedStats: FrogStatsDistributionSchema,
+  lairInstanceId:  z.number().int().positive().nullable().optional(),
 }).refine(
   (d) => Object.values(d.distributedStats).reduce((a, b) => a + b, 0) === 70,
   { message: "Distributed stats must sum to exactly 70", path: ["distributedStats"] }
@@ -157,7 +158,7 @@ export const SpawnChunkSchema = z.object({
 });
 export type SpawnChunkInput = z.infer<typeof SpawnChunkSchema>;
 
-export const TileCharSchema = z.enum(["≈", "+", "~", "@", "#", "%", "D"]);
+export const TileCharSchema = z.enum(["≈", "+", "~", "@", "#", "%", "D", "^"]);
 export type TileChar = z.infer<typeof TileCharSchema>;
 
 export const WorldMapChunkSchema = z.object({
@@ -350,7 +351,7 @@ export type SubmitActionInput = z.infer<typeof SubmitActionSchema>;
 // MOVEMENT ACTION (tRPC queue path)
 // ─────────────────────────────────────────────
 
-export const MoveTypeSchema = z.enum(["STEP", "HOP", "DASH"]);
+export const MoveTypeSchema = z.enum(["STEP", "HOP", "SWIM"]);
 export type MoveActionType = z.infer<typeof MoveTypeSchema>;
 
 // ─────────────────────────────────────────────

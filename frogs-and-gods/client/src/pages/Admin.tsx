@@ -1,4 +1,4 @@
-import { useState, useMemo, Fragment, useEffect } from "react";
+import { useState, useMemo, Fragment, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useWorldLog } from "@/hooks/useWorldLog";
@@ -9,12 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Viewport } from "@/components/Viewport";
+import { Viewport, type FloatingText } from "@/components/Viewport";
 import { WorldInspectorTab } from "@/components/admin/WorldInspectorTab";
 import { FrogCreationPanel } from "./FrogCreationForm";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TILE_REGISTRY, getTileDef } from "../../../shared/tileRegistry";
-import type { TileChar } from "../../../shared/game.schema";
+import type { TileChar, ActionLogEntry } from "../../../shared/game.schema";
 import { DIVINE_POWER_LIST } from "../../../shared/divinePowers";
 import { ActionBar } from "@/components/ActionBar";
 import { ActionLog } from "@/components/ActionLog";
@@ -26,7 +26,8 @@ import { GodViewTab } from "@/components/admin/GodViewTab";
 import { LairTab } from "@/components/admin/LairTab";
 import { ImageDropZone } from "@/components/admin/ImageDropZone";
 import { ItemStatsForm } from "@/components/admin/ItemStatsForm";
-import { spriteManager } from "@/lib/SpriteManager";
+import { spriteManager, SpriteManager } from "@/lib/SpriteManager";
+const frogSpriteManager = new SpriteManager();
 import { useEquippedActionBar } from "@/hooks/useEquippedActionBar";
 
 // ─────────────────────────────────────────────
@@ -134,10 +135,13 @@ function UsersTab() {
 
 function FrogsTab() {
   const { data: frogs, refetch } = trpc.admin.listFrogs.useQuery();
-  const createFrog = trpc.admin.createTestFrog.useMutation({ onSuccess: () => refetch() });
+  const [queued, setQueued] = useState(false);
+  const createFrog = trpc.admin.createTestFrog.useMutation({
+    onSuccess: () => { setQueued(true); void refetch(); },
+  });
   const grantXp    = trpc.admin.grantXp.useMutation({ onSuccess: () => refetch() });
   const resurrect  = trpc.admin.resurrectFrog.useMutation({ onSuccess: () => refetch() });
-  useTickSync(() => { void refetch(); });
+  useTickSync(() => { void refetch(); setQueued(false); });
 
   const [spawnOpen, setSpawnOpen]       = useState(false);
   const [spawnError, setSpawnError]     = useState<string | null>(null);
@@ -168,7 +172,7 @@ function FrogsTab() {
                   onError:   (e) => setSpawnError(e.message),
                 });
               }}
-              isPending={createFrog.isPending}
+              isPending={createFrog.isPending || queued}
               error={spawnError}
               submitLabel="[ Spawn Test Frog ]"
             />
@@ -217,7 +221,10 @@ function FrogsTab() {
                 <td style={{ padding: "6px 8px", color: "#9ca3af" }}>{f.currentXp}/{f.xpToNextLevel}</td>
                 <td style={{ padding: "6px 8px", color: "#4ade80" }}>{f.currentHp}/{f.statsJson.maxHp}</td>
                 <td style={{ padding: "6px 8px", color: "#818cf8" }}>{f.currentMana}/{f.statsJson.maxMana}</td>
-                <td style={{ padding: "6px 8px", color: "#6b7280", fontFamily: "monospace", fontSize: 11 }}>({f.gridX},{f.gridY})</td>
+                <td style={{ padding: "6px 8px", color: "#6b7280", fontFamily: "monospace", fontSize: 11 }}>
+                  <div>({f.gridX},{f.gridY})</div>
+                  <div style={{ color: "#4b5563", fontSize: 10 }}>chunk ({Math.floor(f.gridX / 16)},{Math.floor(f.gridY / 16)})</div>
+                </td>
                 <td style={{ padding: "6px 8px", color: "#9ca3af", fontSize: 11 }}>{f.currentCondition}</td>
                 <td style={{ padding: "6px 8px" }}>
                   {f.isDead ? (
@@ -885,10 +892,20 @@ function WorldTab() {
   const utils = trpc.useUtils();
   const { data: worldStats, isLoading: statsLoading } = trpc.admin.getWorldStats.useQuery();
   const { data: allFrogs } = trpc.admin.listFrogs.useQuery(undefined, { refetchInterval: 10_000 });
+  const [spriteVersion, setSpriteVersion] = useState(0);
   const frogEntities = useMemo(
-    () => (allFrogs ?? []).map((f) => ({ gridX: f.gridX, gridY: f.gridY, type: "frog" as const })),
+    () => (allFrogs ?? []).map((f) => ({ gridX: f.gridX, gridY: f.gridY, type: "frog" as const, id: f.id })),
     [allFrogs],
   );
+
+  useEffect(() => {
+    if (!allFrogs) return;
+    for (const f of allFrogs) {
+      if (f.modelJson) frogSpriteManager.bake(String(f.id), f.modelJson);
+    }
+    frogSpriteManager.prune(new Set(allFrogs.map(f => String(f.id))));
+    setSpriteVersion(v => v + 1);
+  }, [allFrogs]);
 
   const [centerChunk, setCenterChunk] = useState({ chunkX: 0, chunkY: 0 });
 
@@ -957,6 +974,8 @@ function WorldTab() {
             centerChunkY={centerChunk.chunkY}
             chunks={chunkMap ?? {}}
             entities={frogEntities}
+            frogSpriteManager={frogSpriteManager}
+            spriteVersion={spriteVersion}
           />
           <div style={{ flexShrink: 0 }}>
             <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>Spawn Chunk</p>
@@ -1014,6 +1033,8 @@ function WorldTab() {
 function VisionTab() {
   const { data: allFrogs, refetch: refetchAllFrogs } = trpc.admin.listFrogs.useQuery();
   const [selectedFrogId, setSelectedFrogId] = useState<number | null>(null);
+  const [floatingTexts, setFloatingTexts] = useState<FloatingText[]>([]);
+  const prevLogsRef = useRef<ActionLogEntry[]>([]);
 
   const selectedFrog = useMemo(
     () => allFrogs?.find((f) => f.id === selectedFrogId) ?? null,
@@ -1028,6 +1049,8 @@ function VisionTab() {
     { enabled: selectedFrogId !== null },
   );
 
+  const [spriteVersion, setSpriteVersion] = useState(0);
+
   const entities = useMemo(() => {
     if (!vision) return [];
     const predatorTiles = vision.predators.flatMap((p) => {
@@ -1037,27 +1060,23 @@ function VisionTab() {
       return [head, ...body];
     });
     return [
-      ...vision.frogs.map((f) => ({ gridX: f.gridX, gridY: f.gridY, type: "frog" as const })),
+      ...vision.frogs.map((f) => ({ gridX: f.gridX, gridY: f.gridY, type: "frog" as const, id: f.id })),
       ...predatorTiles,
     ];
   }, [vision]);
 
-  // Lazy sprite bake — only fetch pixel data for items not yet in the cache
-  const newItemIds = (vision?.items ?? [])
-    .map(i => i.itemId)
-    .filter(id => !spriteManager.has(id));
-
-  const visionPixelQuery = trpc.frog.getItemPixelData.useQuery(
-    { itemIds: newItemIds },
-    { enabled: newItemIds.length > 0 },
-  );
-
   useEffect(() => {
-    if (!visionPixelQuery.data) return;
-    for (const { itemId, pixelData } of visionPixelQuery.data) {
-      if (pixelData) spriteManager.bake(itemId, pixelData);
+    if (!vision) return;
+    for (const f of vision.frogs) {
+      if (f.modelJson) frogSpriteManager.bake(String(f.id), f.modelJson);
     }
-  }, [visionPixelQuery.data]);
+    for (const i of vision.items) {
+      if (i.pixelData) spriteManager.bake(i.itemId, i.pixelData);
+    }
+    frogSpriteManager.prune(new Set(vision.frogs.map(f => String(f.id))));
+    spriteManager.prune(new Set(vision.items.map(i => i.itemId)));
+    setSpriteVersion(v => v + 1);
+  }, [vision]);
 
   const [selectedTile, setSelectedTile] = useState<{ gridX: number; gridY: number } | null>(null);
   const [lockedIn, setLockedIn] = useState(false);
@@ -1086,6 +1105,18 @@ function VisionTab() {
     selectedFrog?.gridX ?? null,
     selectedFrog?.gridY ?? null,
   );
+
+  useEffect(() => {
+    const prev = prevLogsRef.current;
+    const newLogs = actionLogs.filter(l => !prev.includes(l) && l.text.includes("croaks!"));
+    prevLogsRef.current = actionLogs;
+    if (newLogs.length === 0) return;
+    const now = Date.now();
+    setFloatingTexts(cur => [
+      ...cur.filter(t => now - t.createdAt < 1000),
+      ...newLogs.map(l => ({ gridX: l.x, gridY: l.y, text: "croak!", createdAt: now })),
+    ]);
+  }, [actionLogs]);
 
   const frogTileChar = useMemo(() => {
     if (!selectedFrog || !vision) return null;
@@ -1159,6 +1190,8 @@ function VisionTab() {
               groundItems={(vision?.items ?? [])
                 .filter(i => i.gridX != null && i.gridY != null)
                 .map(i => ({ gridX: i.gridX!, gridY: i.gridY!, itemId: i.itemId }))}
+              frogSpriteManager={frogSpriteManager}
+              spriteVersion={spriteVersion}
               selectedTile={equippedActionBar.targetingMode ? undefined : (selectedTile ?? undefined)}
               onTileClick={(gx, gy) => {
                 if (equippedActionBar.targetingMode) {
@@ -1171,6 +1204,7 @@ function VisionTab() {
               hoveredTargetTile={equippedActionBar.targetingMode ? (equippedActionBar.hoveredTile ?? undefined) : undefined}
               onTileHover={equippedActionBar.targetingMode ? equippedActionBar.handleTileHover : undefined}
               onTileRightClick={equippedActionBar.targetingMode ? equippedActionBar.cancelTargeting : undefined}
+              floatingTexts={floatingTexts}
             />
           )}
         </div>
@@ -1196,7 +1230,7 @@ function VisionTab() {
                       {lookData.tileChar} {lookData.tileDef.label}
                     </p>
                     <p style={{ fontSize: 11, color: "#4b5563", margin: "2px 0 0" }}>
-                      move cost: {lookData.tileDef.movementCost}
+                      {lookData.tileDef.isWater ? "water" : lookData.tileDef.isLilyPad ? "lily pad" : "land"}
                     </p>
                   </>
                 ) : (
@@ -1251,6 +1285,7 @@ function VisionTab() {
         lockedIn={lockedIn}
         equippedActions={equippedActionBar.equippedActions}
         targetingMode={equippedActionBar.targetingMode}
+        playerTileChar={frogTileChar as TileChar | null}
         onMove={(actionType) => {
           if (!selectedFrogId || !selectedTile) return;
           submitMove.mutate({
@@ -1270,6 +1305,10 @@ function VisionTab() {
             targetGridX: selectedTile.gridX,
             targetGridY: selectedTile.gridY,
           });
+        }}
+        onCroak={() => {
+          if (!selectedFrogId) return;
+          submitAction.mutate({ frogId: selectedFrogId, actionType: "CROAK" });
         }}
         onOpenDoor={frogTileChar === "D" ? () => {
           if (!selectedFrogId) return;

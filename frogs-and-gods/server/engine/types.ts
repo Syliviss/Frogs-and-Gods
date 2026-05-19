@@ -3,6 +3,7 @@ import type { Frog, Predator, Item, WorldMapChunk, InsertWorldLogEvent, God, Ins
 export interface UpdateInstruction {
   type:
     | "FROG_UPDATE"
+    | "FROG_INSERT"
     | "PREDATOR_UPDATE"
     | "ITEM_UPDATE"
     | "WORLD_LOG_INSERT"

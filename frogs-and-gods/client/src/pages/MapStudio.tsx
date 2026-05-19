@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
-import { spriteManager } from "@/lib/SpriteManager";
+import { spriteManager, SpriteManager } from "@/lib/SpriteManager";
 import { TILE_REGISTRY } from "../../../shared/tileRegistry";
 import type { TileChar } from "../../../shared/game.schema";
+
+const frogSpriteManager = new SpriteManager();
 
 const CHUNK_SIZE = 16;
 const BASE_TILE_W = 24;
@@ -64,6 +66,14 @@ export default function MapStudio() {
     },
     [centerChunkX, centerChunkY, TILE_W, TILE_H, OFFSET_X, OFFSET_Y],
   );
+
+  // Bake frog sprites from modelJson included in the response
+  useEffect(() => {
+    if (!data) return;
+    for (const f of data.frogs) {
+      if (f.modelJson) frogSpriteManager.bake(String(f.id), f.modelJson);
+    }
+  }, [data]);
 
   // Re-render whenever data, scale, radius, or toggle state changes
   useEffect(() => {
@@ -141,10 +151,17 @@ export default function MapStudio() {
 
     // Pass 3: entities
     if (showEntities) {
+      const frogSpriteOffset = Math.round(scale * 9);
+      const frogSpriteSize = Math.round(scale * 18);
       for (const entity of data.frogs) {
         const { screenX, screenY } = tileToScreen(entity.gridX, entity.gridY);
-        ctx.fillStyle = "#00ff88";
-        ctx.fillRect(screenX - scale * 4, screenY - scale * 4, scale * 9, scale * 9);
+        const frogSprite = entity.id != null ? frogSpriteManager.get(String(entity.id)) : undefined;
+        if (frogSprite) {
+          ctx.drawImage(frogSprite, screenX - frogSpriteOffset, screenY - frogSpriteOffset, frogSpriteSize, frogSpriteSize);
+        } else {
+          ctx.fillStyle = "#00ff88";
+          ctx.fillRect(screenX - scale * 4, screenY - scale * 4, scale * 9, scale * 9);
+        }
       }
       for (const predator of data.predators) {
         const { screenX, screenY } = tileToScreen(predator.gridX, predator.gridY);

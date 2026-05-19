@@ -42,6 +42,7 @@ ActionBar.tsx
 ```
 
 #### God actions (actorId = 0, system sentinel)
+`frog.create` → queues `CREATE_FROG` (player character creation, async — see below)  
 `admin.createGod` → queues `CREATE_GOD`  
 `admin.createItem` → queues `CREATE_ITEM`  
 `admin.spawnItem` → queues `SPAWN_ITEM`  
@@ -49,6 +50,25 @@ ActionBar.tsx
 `admin.triggerKill` → queues `KILL_PREDATOR`  
 
 All set `actorId = 0` (system sentinel) and `resolveBucket = Math.floor(Date.now() / 500)`.
+
+##### `frog.create` — async character creation via `CREATE_FROG`
+
+`frog.create` is the player-facing entry point. It pre-validates (throws `CONFLICT` if user already has a living frog) then queues `CREATE_FROG`. Returns `{ queued: true }`.
+
+```
+FrogCreationForm.tsx
+  └─ LairSelectionStep → player picks one of 5 random god lairs (frog.getRandomLairs query)
+       └─ stat distribution form
+            └─ trpc.frog.create.mutate({ name, species, distributedStats, lairInstanceId })
+                 └─ getFrogsByOwnerId(userId) → CONFLICT if frog exists (pre-validate)
+                 └─ createPendingAction({ actorId: 0, actionType: "CREATE_FROG", payload: { userId, ... } })
+                 └─ returns { queued: true }
+
+Client: hatching = true → shows HatchingScreen
+  └─ WebSocket ENGINE_TICK → trpc.frog.myFrog.refetch() → if frog exists → navigate to /game
+  └─ WebSocket SUBTICK_LOGS → if log starts with "CREATE_FROG failed:" → show error, reset form
+  └─ 60s safety timeout → show "Something went wrong" + reset
+```
 
 #### Divine intervention actions (actorId = godId, favor-deducting)
 Used by the God's View tab. `actorId = godId` (positive integer). Favor check happens twice: once at queue time in the endpoint (early rejection) and again at resolution time in `validate()` (re-checks `state.gods` to prevent double-spend).
@@ -215,6 +235,15 @@ Section C — DIV_PLACE_LAIR entrance preload:
    For each god action with actionType === "DIV_PLACE_LAIR":
      getLairEntrancesByOwnerGodId(godId) → state.lairEntrances
    (Needed so validate can count existing entrances for this god and determine free vs 50-favor cost.)
+
+Section D — CREATE_FROG preload:
+   For each god action with actionType === "CREATE_FROG":
+     getFrogsByOwnerId(userId from payload) → state.frogs  (one-frog check)
+     If lairInstanceId present:
+       getLairEntrancesByInstanceId(lairInstanceId) → state.lairEntrances
+       Load 15-tile neighborhood chunks around entrance → state.chunks
+     Else (edge spawn):
+       pickRandomMapEdgeTile(userId) → load 2-tile neighborhood chunk → state.chunks
 ```
 
 `SimulatedState` is defined in `server/engine/types.ts`. It is an in-memory replica of the relevant DB slice for this tick.
@@ -271,6 +300,7 @@ UpdateInstruction[]
   │
   ├── Compile phase (merge multiple updates to same entity):
   │     frogUpdates:      Map<id, Partial<Frog>>     ← multiple FROG_UPDATEs merged via spread
+  │     frogsToInsert:    Frog[]                      ← FROG_INSERT (new frogs from CREATE_FROG)
   │     predatorUpdates:  Map<id, Partial<Predator>>
   │     itemUpdates:      Map<id, Partial<Item>>
   │     itemsToInsert:    Item[]                      ← ITEM_INSERT
@@ -357,12 +387,13 @@ swingHandler.broadcast():
 ### Immediate — targeted WebSocket message
 Each handler's `broadcast()` phase calls `notify(userId, data)`:
 ```
-{ type: "ITEM_EQUIPPED",   itemId }
-{ type: "ITEM_PICKED_UP",  itemId, frogId }
-{ type: "ACTION_RESOLVED", gridX, gridY }
-{ type: "FUMBLE",          message }
-{ type: "SWING_RESOLVED",  targetTiles, damaged }
-{ type: "OPEN_DOOR",       mode }   ← "enter" or "exit"; frog owner notified on lair traversal
+{ type: "ITEM_EQUIPPED",      itemId }
+{ type: "ITEM_PICKED_UP",     itemId, frogId }
+{ type: "ACTION_RESOLVED",    gridX, gridY }
+{ type: "FUMBLE",             message }
+{ type: "SWING_RESOLVED",     targetTiles, damaged }
+{ type: "OPEN_DOOR",          mode }          ← "enter" or "exit"; frog owner notified on lair traversal
+{ type: "CREATE_FROG_FAILED", reason: string } ← sent to userId on pipeline failure; HatchingScreen listens for this
 ```
 Delivered immediately when the action resolves, before the next ENGINE_TICK.
 

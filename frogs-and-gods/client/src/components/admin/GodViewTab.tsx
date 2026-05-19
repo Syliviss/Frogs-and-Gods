@@ -1,11 +1,13 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { keepPreviousData } from "@tanstack/react-query";
 import { trpc } from "@/lib/trpc";
 import { Viewport } from "@/components/Viewport";
 import { ActionLog } from "@/components/ActionLog";
 import { useTickSync } from "@/hooks/useTickSync";
 import { useActionLogs } from "@/hooks/useActionLogs";
-import { spriteManager } from "@/lib/SpriteManager";
+import { spriteManager, SpriteManager } from "@/lib/SpriteManager";
+
+const frogSpriteManager = new SpriteManager();
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { TILE_REGISTRY } from "../../../../shared/tileRegistry";
@@ -34,6 +36,19 @@ export function GodViewTab() {
   const [coordInputY, setCoordInputY] = useState("0");
   const [pendingPan, setPendingPan] = useState<{ chunkX: number; chunkY: number } | null>(null);
 
+  // ── Initialize camera on a random frog ───────────────
+  const cameraInitialized = useRef(false);
+  const { data: randomFrogChunk } = trpc.admin.getRandomFrogChunk.useQuery();
+  useEffect(() => {
+    if (!cameraInitialized.current && randomFrogChunk) {
+      setCameraChunkX(randomFrogChunk.chunkX);
+      setCameraChunkY(randomFrogChunk.chunkY);
+      setCoordInputX(String(randomFrogChunk.chunkX));
+      setCoordInputY(String(randomFrogChunk.chunkY));
+      cameraInitialized.current = true;
+    }
+  }, [randomFrogChunk]);
+
   // ── Vision query ─────────────────────────────────────
   const { data: vision, refetch: refetchVision } = trpc.admin.getGodVision.useQuery(
     { centerChunkX: cameraChunkX, centerChunkY: cameraChunkY },
@@ -41,6 +56,8 @@ export function GodViewTab() {
   );
 
   // ── Sprite loading ────────────────────────────────────
+  const [spriteVersion, setSpriteVersion] = useState(0);
+
   const newItemIds = (vision?.items ?? [])
     .map((i) => i.itemId)
     .filter((id) => !spriteManager.has(id));
@@ -55,20 +72,29 @@ export function GodViewTab() {
     }
   }, [pixelQuery.data]);
 
+  useEffect(() => {
+    if (!vision) return;
+    for (const f of vision.frogs) {
+      if (f.modelJson) frogSpriteManager.bake(String(f.id), f.modelJson);
+    }
+    frogSpriteManager.prune(new Set(vision.frogs.map(f => String(f.id))));
+    setSpriteVersion((v) => v + 1);
+  }, [vision]);
+
   // ── Entities for Viewport ─────────────────────────────
   const entities = useMemo(() => {
     if (!vision) return [];
     const predatorTiles = vision.predators.flatMap((p) => {
       const stats = p.statsJson as { segments?: { x: number; y: number }[] } | null;
-      const head = { gridX: p.gridX, gridY: p.gridY, type: "predator" as const };
-      const body = (stats?.segments ?? []).map((s) => ({ gridX: s.x, gridY: s.y, type: "predator" as const }));
+      const head = { gridX: p.gridX, gridY: p.gridY, type: "predator" as const, id: p.id };
+      const body = (stats?.segments ?? []).map((s) => ({ gridX: s.x, gridY: s.y, type: "predator" as const, id: p.id }));
       return [head, ...body];
     });
     return [
-      ...vision.frogs.map((f) => ({ gridX: f.gridX, gridY: f.gridY, type: "frog" as const })),
+      ...vision.frogs.map((f) => ({ gridX: f.gridX, gridY: f.gridY, type: "frog" as const, id: f.id })),
       ...predatorTiles,
     ];
-  }, [vision]);
+  }, [vision, spriteVersion]);
 
   // ── Tile selection ────────────────────────────────────
   const [selectedTile, setSelectedTile] = useState<{ gridX: number; gridY: number } | null>(null);
@@ -306,6 +332,7 @@ export function GodViewTab() {
             hoveredTargetTile={(activePower || placingLairEntrance) ? (hoveredTile ?? undefined) : undefined}
             onTileHover={(activePower || placingLairEntrance) ? (gx, gy) => setHoveredTile({ gridX: gx, gridY: gy }) : undefined}
             onTileRightClick={(activePower || placingLairEntrance) ? () => { setActivePower(null); setPlacingLairEntrance(false); setHoveredTile(null); } : undefined}
+            frogSpriteManager={frogSpriteManager}
           />
         </div>
 
@@ -331,7 +358,7 @@ export function GodViewTab() {
                       {lookData.tileChar} {lookData.tileDef.label}
                     </p>
                     <p style={{ fontSize: 11, color: "#4b5563", margin: "2px 0 0" }}>
-                      move cost: {lookData.tileDef.movementCost}
+                      {lookData.tileDef.isWater ? "water" : lookData.tileDef.isLilyPad ? "lily pad" : "land"}
                     </p>
                   </>
                 ) : (

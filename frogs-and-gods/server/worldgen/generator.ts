@@ -3,7 +3,7 @@ import type { Biome } from "../../shared/game.schema";
 import { BIOME_REGISTRY, getBiomeForChunk } from "./biomeMap";
 import { isChunkSolid } from "./macroLayer";
 import { stampPois } from "./poiRegistry";
-import { resolveTile } from "./tileResolver";
+import { resolveTile, scatterLilyPads } from "./tileResolver";
 
 export const CHUNK_SIZE = 16;
 
@@ -41,10 +41,13 @@ export function generateChunk(
       const worldY = chunkY * CHUNK_SIZE + ly;
       const raw        = noise.GetNoise(worldX, worldY);
       const normalized = (raw + 1) / 2;
-      row.push(resolveTile(normalized, worldX, worldY, seed, biome));
+      row.push(resolveTile(normalized, biome));
     }
     grid.push(row);
   }
+
+  // Layer 3.5: lily pad scatter (chunk-level, density-weighted)
+  scatterLilyPads(grid, chunkX, chunkY, seed);
 
   // Layer 4: POI stamper
   stampPois(chunkX, chunkY, grid);

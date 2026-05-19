@@ -26,9 +26,9 @@ export function getBiomeForChunk(cx: number, cy: number, seed: number): Biome {
   noise.SetFrequency(BIOME_NOISE_FREQUENCY);
   const n = (noise.GetNoise(cx, cy) + 1) / 2;
 
-  if (n < 0.20) return "swamp";
-  if (n < 0.40) return "forest";
-  if (n < 0.60) return "grassland";
-  if (n < 0.80) return "mountain";
+  if (n < 0.90) return "swamp";
+  if (n < 0.96) return "mountain";
+  if (n < 0.98) return "grassland";
+  if (n < 0.99) return "forest";
   return "desert";
 }

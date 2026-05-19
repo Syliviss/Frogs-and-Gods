@@ -141,21 +141,13 @@ Server: getPlayerVision handler
 Response:
 {
   chunks:    Record<"cx:cy", string[][]>,  // e.g. "2:3" → 16×16 char grid
-  frogs:     Frog[],                       // absolute gridX, gridY — modelJson STRIPPED
+  frogs:     Frog[],                       // absolute gridX, gridY — includes modelJson
   predators: Predator[],                   // absolute gridX, gridY
-  items:     Item[]                        // absolute gridX, gridY — pixelData STRIPPED
+  items:     Item[]                        // absolute gridX, gridY — includes pixelData
 }
 ```
 
-**Note:** Both `pixel_data` (items) and `model_json` (frogs) are explicitly stripped before the response is sent:
-
-```typescript
-// server/routers.ts — inside getPlayerVision
-const groundItems = itemRows.map(({ pixelData: _px, ...rest }) => rest);
-```
-
-This keeps vision payloads lean. A 256-element color array per visible item would bloat every tick response. Instead, sprite data is fetched lazily on demand via a separate tRPC query (see §6 below).
-```
+Both `pixel_data` (items) and `model_json` (frogs) are **included** in the vision response. The client bakes all sprites immediately on arrival — there is no separate lazy-fetch round-trip (see §6 and §7 below).
 
 All four database queries run in parallel. The response is a complete, self-contained snapshot of everything visible to the player at this moment. The client replaces its prior state entirely — there is no merging, diffing, or reconciliation. The server's answer is the truth.
 
@@ -195,9 +187,9 @@ No physics. No collision detection. No prediction. No interpolation (see [Burst 
 
 ---
 
-### 6. Item Sprite Rendering: The Lazy-Load Pipeline
+### 6. Item Sprite Rendering: The Bake-on-Arrival Pipeline
 
-Item sprites are a 16×16 pixel art overlay drawn on top of the terrain in the isometric viewport. Their data originates in the database `pixel_data` column, travels to the client in a separate on-demand query, and is rasterized into an off-screen canvas that the main `Viewport` reads from during each redraw.
+Item sprites are a 16×16 pixel art overlay drawn on top of the terrain in the isometric viewport. Their data originates in the database `pixel_data` column, arrives with the vision response, and is rasterized into an off-screen canvas that the main `Viewport` reads during each redraw.
 
 #### Step 1 — Database storage
 
@@ -211,70 +203,63 @@ A fully transparent pixel is represented as `null` or `"#00000000"`. The column 
 
 When a god creates an item via the Admin UI, they supply 256 newline-separated hex values in a textarea. The client splits on `\n`, trims whitespace, maps empty lines to `null`, and sends the resulting array as part of the `CREATE_ITEM` pending action payload.
 
-#### Step 2 — Exclusion from the vision snapshot
+#### Step 2 — Inclusion in the vision snapshot
 
-The `getPlayerVision` tRPC handler deliberately omits `pixel_data` from its response:
+`getPlayerVision` returns `pixel_data` on every item in its response. Items are included fully — no stripping.
 
-```typescript
-// server/routers.ts
-const groundItems = itemRows.map(({ pixelData: _px, ...rest }) => rest);
-return { chunks, frogs, predators, items: groundItems };
-```
+#### Step 3 — SpriteManager: the in-memory raster cache
 
-A single `pixel_data` array is up to ~6 KB of JSON. Broadcasting it for every visible item on every tick would bloat an otherwise lean payload. The vision snapshot carries enough to position and identify items — their sprites are fetched separately.
-
-#### Step 3 — Lazy fetch via `frog.getItemPixelData`
-
-When the client needs to render a sprite it doesn't yet have cached, it calls:
+`client/src/lib/SpriteManager.ts` exports both a default singleton (`spriteManager`) and the `SpriteManager` class. It holds a `Map<id, HTMLCanvasElement>` with three methods:
 
 ```typescript
-frog.getItemPixelData({ itemIds: string[] })  // max 64 IDs per request
-// Returns: { itemId: string, pixelData: (string | null)[] | null }[]
+spriteManager.bake(id, pixels)  // rasterizes once, stores canvas
+spriteManager.get(id)           // returns canvas or undefined
+spriteManager.prune(activeIds)  // evicts canvases for IDs no longer visible
 ```
 
-This query is driven by item IDs visible in the current vision snapshot. The client triggers it after receiving a fresh vision response and discovering item IDs not yet present in `SpriteManager`.
+`bake()` creates an off-screen 16×16 `<canvas>` element, iterates the 256-element pixel array, and fills each non-null, non-transparent pixel with `ctx.fillRect(col, row, 1, 1)`. It is idempotent — calling it again for the same ID is a no-op.
 
-#### Step 4 — SpriteManager: the in-memory raster cache
+#### Step 4 — Bake-on-arrival in `useEffect([vision])`
 
-`client/src/lib/SpriteManager.ts` is a singleton that holds a `Map<itemId, HTMLCanvasElement>`. It has three methods:
+The moment a new vision snapshot arrives, a `useEffect` fires:
 
 ```typescript
-spriteManager.bake(itemId, pixels)  // rasterizes once, stores canvas
-spriteManager.get(itemId)           // returns canvas or undefined
-spriteManager.prune(activeItemIds)  // evicts canvases for items no longer visible
+useEffect(() => {
+  if (!vision) return;
+  for (const i of vision.items) {
+    if (i.pixelData) spriteManager.bake(i.itemId, i.pixelData);
+  }
+  spriteManager.prune(new Set(vision.items.map(i => i.itemId)));
+  setSpriteVersion(v => v + 1);
+}, [vision]);
 ```
 
-`bake()` creates an off-screen 16×16 `<canvas>` element, iterates the 256-element pixel array, and fills each non-null, non-transparent pixel with `ctx.fillRect(col, row, 1, 1)`. It is idempotent — calling it again for the same `itemId` is a no-op. The baked canvas is never modified after creation.
-
-`prune()` is called after each `ENGINE_TICK` vision refetch, passing the union of currently-visible ground item IDs and the player's held item IDs. Any canvas whose item ID is absent from that set is evicted from the Map, freeing the memory.
+Baking is synchronous and idempotent. `prune()` runs immediately after, evicting sprites for items that left the 3×3 chunk neighborhood. `spriteVersion` increments to tell `Viewport` to redraw now that sprites are ready.
 
 #### Step 5 — Viewport rendering (Pass 3)
 
-During each `Viewport` redraw, Pass 3 iterates `groundItems` (items with non-null `gridX`/`gridY`). For each item the isometric screen position is computed and then:
+During each `Viewport` redraw, Pass 3 iterates `groundItems` (items with non-null `gridX`/`gridY`). For each item:
 
 ```
 spriteCanvas = spriteManager.get(item.itemId)
 
 if spriteCanvas:
-    ctx.drawImage(spriteCanvas, screenX - 12, screenY - 12, 24, 24)
-    // scales the 16×16 off-screen canvas to 24×24 on the main canvas
+    ctx.drawImage(spriteCanvas, screenX - 9, screenY - 9, 18, 18)
     // imageSmoothingEnabled = false keeps pixels blocky (pixel-art quality)
 else:
     ctx.fillStyle = "#f472b6"    // pink fallback
-    ctx.fillRect(screenX - 4, screenY - 4, 9, 9)
+    ctx.fillRect(screenX - 3, screenY - 3, 7, 7)
 ```
-
-The fallback pink square is the same visual weight as the green frog / red predator squares — all entities without sprite art render as 9×9 colored squares. This means items are always visible on the map even before their sprites have been fetched or if they were never given pixel art.
 
 #### Full pipeline summary
 
 ```
 DB: items.pixel_data (JSONB 256-element array)
     │
-    │  [excluded from getPlayerVision response]
+    │  [included in getPlayerVision response]
     │
     ▼
-frog.getItemPixelData (on-demand tRPC query, triggered by vision refetch)
+useEffect([vision]) — bake all items, prune stale sprites, setSpriteVersion++
     │
     ▼
 SpriteManager.bake(itemId, pixels)
@@ -282,15 +267,15 @@ SpriteManager.bake(itemId, pixels)
     │
     ▼
 Viewport Pass 3 — spriteManager.get(itemId)
-    → drawImage (24×24, no smoothing)   if baked
-    → fillRect  pink 9×9 square         if not baked / no pixel art
+    → drawImage (18×18, no smoothing)   if baked
+    → fillRect  pink 7×7 square         if not baked / no pixel art
 ```
 
 ---
 
-### 7. Frog Sprite Rendering: The Model Pipeline
+### 7. Frog Sprite Rendering: The Bake-on-Arrival Pipeline
 
-Frog sprites follow the same lazy-load pipeline as item sprites, with one key difference: the pixel data is **generated server-side at frog creation** from a species palette and a shared template, rather than being authored by hand.
+Frog sprites follow the same bake-on-arrival pipeline as item sprites. The pixel data is **generated server-side at frog creation** from a per-species hardcoded 256-element array, rather than being authored by hand.
 
 #### Step 1 — Database storage
 
@@ -298,33 +283,31 @@ Frog sprites follow the same lazy-load pipeline as item sprites, with one key di
 
 #### Step 2 — The model registry (`server/assets/frogModels.ts`)
 
-The registry defines two things:
+The registry defines one explicit 256-element pixel array per species in `FROG_SPRITES: Record<FrogSpecies, (string|null)[]>`. Each array is a flat, row-major 16×16 grid of hex colors (or `null` for transparent).
 
-- **`FROG_PALETTES`** — a `Record<FrogSpecies, FrogColorPalette>` mapping each species to four color slots: `body`, `belly`, `eye`, `pupil`. **This is the only place you need to edit to change a species' appearance.**
-- **`BASE_TEMPLATE`** — a 256-element `PixelKey[]` array defining the frog silhouette. Each entry maps a pixel to a palette slot (`"body"`, `"belly"`, `"eye"`, `"pupil"`, or `null` for transparent).
+**To change a species' appearance: edit the hex strings in that species' array in `FROG_SPRITES` directly.** Each entry corresponds to exactly one pixel — `i % 16` = column, `Math.floor(i / 16)` = row.
 
-`generateFrogPixelData(species)` maps template keys through the species palette → output hex array. Template shape changes affect all species; palette changes affect only the target species.
+`generateFrogPixelData(species)` simply returns `FROG_SPRITES[species]`.
 
-#### Steps 3–5 — Exclusion, lazy fetch, bake, prune
+#### Steps 3–5 — Inclusion, bake-on-arrival, prune
 
 Identical to the item sprite pipeline:
 
-- `getPlayerVision` strips `model_json` from the frog rows it returns
-- `frog.getFrogSpriteData({ frogIds })` fetches `{ id, modelJson }[]` on demand (max 64)
-- A second `SpriteManager` instance (`frogSpriteManager` in `GamePage.tsx`) bakes and caches sprites keyed by `String(frog.id)` — separate from the item cache to prevent ID collisions
-- `frogSpriteManager.prune(visibleFrogIds)` is called after each tick refetch
+- `getPlayerVision` includes `model_json` in frog rows — no stripping
+- A second `SpriteManager` instance (`frogSpriteManager`) bakes and caches sprites keyed by `String(frog.id)` — separate from the item cache to prevent ID collisions
+- The same `useEffect([vision])` that bakes item sprites also bakes frog sprites, prunes both caches, and increments `spriteVersion`
 
 #### Viewport rendering
 
 In Pass 3, for each frog entity: `frogSpriteManager.get(String(entity.id))` → `drawImage(18×18)` if baked, or green `#00ff88` 9×9 square fallback if not.
 
 ```
-DB: frogs.model_json (JSONB 256-element array, generated from FROG_PALETTES at creation)
+DB: frogs.model_json (JSONB 256-element array, from FROG_SPRITES[species] at creation)
     │
-    │  [excluded from getPlayerVision response]
+    │  [included in getPlayerVision response]
     │
     ▼
-frog.getFrogSpriteData (on-demand tRPC query, triggered by vision refetch)
+useEffect([vision]) — bake all frogs + items, prune, setSpriteVersion++
     │
     ▼
 frogSpriteManager.bake(String(frog.id), modelJson)
@@ -333,7 +316,7 @@ frogSpriteManager.bake(String(frog.id), modelJson)
     ▼
 Viewport Pass 3 — frogSpriteManager.get(String(entity.id))
     → drawImage (18×18, no smoothing)    if baked
-    → fillRect  green 9×9 square         if not baked / null modelJson
+    → fillRect  green 9×9 square         if null modelJson (backfill not yet run)
 ```
 
 ---

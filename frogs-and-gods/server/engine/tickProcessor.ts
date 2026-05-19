@@ -6,6 +6,7 @@ import {
   getPendingPredatorActions,
   getChunksInBoundingBox,
   getFrogsInBounds,
+  getFrogsByOwnerId,
   getPredatorsInChunkArea,
   getItemsInBounds,
   getInstancesByIds,
@@ -19,6 +20,7 @@ import {
 } from "../db";
 import { pendingActions, worldLogEvents, frogs, predators, items, gods, instances, lairEntrances, worldMapOverrides } from "../../drizzle/schema";
 import { runAction, GOD_ACTION_REGISTRY, PREDATOR_ACTION_REGISTRY, ACTION_REGISTRY } from "../actions/index";
+import { pickRandomMapEdgeTile } from "../actions/_spawnUtils";
 import type { NotifyFn, ActionContext } from "../actions/_types";
 import type { GodActionContext } from "../actions/god_types";
 import type { PredatorActionContext } from "../actions/_predator_types";
@@ -229,6 +231,44 @@ export async function processAllActions(notify: NotifyFn = () => {}): Promise<vo
     for (const e of godEntrances) state.lairEntrances.set(e.id, e);
   }
 
+  // ── Inhale Section D: CREATE_FROG spatial preload ─────────────────────────
+  // For each CREATE_FROG action: load the creator's existing frogs (one-frog check),
+  // the target lair entrance + surrounding chunks (spawn tile calculation),
+  // or an edge-chunk for fallback spawns.
+  const createFrogActions = godActions.filter(a => a.actionType === "CREATE_FROG");
+  if (createFrogActions.length > 0) {
+    const createFrogJobs: Promise<void>[] = [];
+    for (const a of createFrogActions) {
+      const p = a.payload as Record<string, unknown> | null;
+      const userId = typeof p?.userId === "number" ? p.userId : null;
+      const lairInstanceId = typeof p?.lairInstanceId === "number" ? p.lairInstanceId : null;
+
+      if (userId != null) {
+        createFrogJobs.push(
+          getFrogsByOwnerId(userId).then(ownerFrogs => {
+            for (const f of ownerFrogs) state.frogs.set(f.id, f);
+          })
+        );
+      }
+
+      if (lairInstanceId != null) {
+        createFrogJobs.push(
+          getLairEntrancesByInstanceId(lairInstanceId).then(async (entrances) => {
+            for (const e of entrances) state.lairEntrances.set(e.id, e);
+            if (entrances[0]) {
+              await loadNeighborhood(actorBox(entrances[0].gridX, entrances[0].gridY, [a], 15));
+            }
+          })
+        );
+      } else if (userId != null) {
+        // Edge spawn: load a small neighborhood around the deterministic edge tile
+        const edgeTile = pickRandomMapEdgeTile(userId);
+        createFrogJobs.push(loadNeighborhood(actorBox(edgeTile.gridX, edgeTile.gridY, [a], 2)));
+      }
+    }
+    await Promise.all(createFrogJobs);
+  }
+
   // 3. Predator AI Injection
   // (Left as a placeholder for the explicit AI tick integration later)
 
@@ -358,6 +398,7 @@ export async function processAllActions(notify: NotifyFn = () => {}): Promise<vo
     const itemUpdates = new Map<string, Partial<typeof items.$inferInsert>>();
     const godUpdates = new Map<number, Partial<typeof gods.$inferInsert>>();
     const instanceUpdates = new Map<number, Partial<typeof instances.$inferInsert>>();
+    const frogsToInsert: (typeof frogs.$inferInsert)[] = [];
     const itemsToInsert: (typeof items.$inferInsert)[] = [];
     const godsToInsert: (typeof gods.$inferInsert)[] = [];
     const predatorsToInsert: (typeof predators.$inferInsert)[] = [];
@@ -386,6 +427,8 @@ export async function processAllActions(notify: NotifyFn = () => {}): Promise<vo
       } else if (inst.type === "INSTANCE_UPDATE") {
         const id = inst.id as number;
         instanceUpdates.set(id, { ...instanceUpdates.get(id), ...inst.changes });
+      } else if (inst.type === "FROG_INSERT") {
+        frogsToInsert.push(inst.data);
       } else if (inst.type === "ITEM_INSERT") {
         itemsToInsert.push(inst.data);
       } else if (inst.type === "GOD_INSERT") {
@@ -412,6 +455,9 @@ export async function processAllActions(notify: NotifyFn = () => {}): Promise<vo
     }
 
     // Execute bulk statements
+    if (frogsToInsert.length > 0) {
+      await tx.insert(frogs).values(frogsToInsert);
+    }
     for (const [id, changes] of Array.from(frogUpdates.entries())) {
       await tx.update(frogs).set(changes).where(eq(frogs.id, id));
     }

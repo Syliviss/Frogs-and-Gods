@@ -1,4 +1,11 @@
 import { useCallback, useEffect, useRef } from "react";
+
+export interface FloatingText {
+  gridX:     number;
+  gridY:     number;
+  text:      string;
+  createdAt: number;
+}
 import { TILE_REGISTRY } from "../../../shared/tileRegistry";
 import type { TileChar } from "../../../shared/game.schema";
 import { spriteManager, SpriteManager } from "../lib/SpriteManager";
@@ -26,8 +33,12 @@ interface ViewportProps {
   onTileHover?: (gridX: number, gridY: number) => void;
   /** Called on right-click — used to cancel targeting mode */
   onTileRightClick?: () => void;
-  /** Separate sprite cache for frog models — lazily baked, pruned each tick */
+  /** Separate sprite cache for frog models — baked on vision arrival, pruned when entities leave */
   frogSpriteManager?: SpriteManager;
+  /** Incremented after sprites are baked; causes canvas to redraw with fresh sprites */
+  spriteVersion?: number;
+  /** Floating text overlays (e.g. "croak!") — faded out over 1 second by the overlay rAF loop */
+  floatingTexts?: FloatingText[];
 }
 
 export function Viewport({
@@ -43,8 +54,11 @@ export function Viewport({
   onTileHover,
   onTileRightClick,
   frogSpriteManager,
+  spriteVersion: _spriteVersion,
+  floatingTexts,
 }: ViewportProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasRef  = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
 
   // Shared inverse isometric transform: screen coordinates → absolute grid tile
   // Forward: screenX = (worldX - worldY) * 8 + 400, screenY = (worldX + worldY) * 4 + 150
@@ -197,10 +211,65 @@ export function Viewport({
     }
   }, [
     centerChunkX, centerChunkY, chunks, entities, groundItems,
-    selectedTile, targetingTiles, hoveredTargetTile, frogSpriteManager,
+    selectedTile, targetingTiles, hoveredTargetTile, frogSpriteManager, _spriteVersion,
   ]);
 
+  // Overlay rAF loop — draws floating texts with fade + upward drift, independent of main canvas
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay || !floatingTexts || floatingTexts.length === 0) {
+      overlayRef.current?.getContext("2d")?.clearRect(0, 0, CANVAS_W, CANVAS_H);
+      return;
+    }
+    const ctx = overlay.getContext("2d");
+    if (!ctx) return;
+
+    let rafId: number;
+
+    const draw = () => {
+      ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+      const now = Date.now();
+      let anyActive = false;
+
+      ctx.font = "bold 8px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+
+      for (const ft of floatingTexts) {
+        const elapsed = now - ft.createdAt;
+        if (elapsed >= 1000) continue;
+        anyActive = true;
+
+        const worldX = ft.gridX - centerChunkX * CHUNK_SIZE;
+        const worldY = ft.gridY - centerChunkY * CHUNK_SIZE;
+        const screenX = Math.floor((worldX - worldY) * (TILE_W / 2)) + OFFSET_X;
+        const baseY   = Math.floor((worldX + worldY) * (TILE_H / 2)) + OFFSET_Y;
+        const textY   = baseY - 20 - elapsed * 0.014; // drifts ~14px upward over 1s
+
+        const alpha = 1 - elapsed / 1000;
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = "rgba(0,0,0,0.9)";
+        ctx.lineWidth = 2;
+        ctx.strokeText(ft.text, screenX, textY);
+        ctx.fillStyle = "#88ffcc";
+        ctx.fillText(ft.text, screenX, textY);
+      }
+
+      ctx.globalAlpha = 1;
+
+      if (anyActive) {
+        rafId = requestAnimationFrame(draw);
+      } else {
+        ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+      }
+    };
+
+    rafId = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(rafId);
+  }, [floatingTexts, centerChunkX, centerChunkY]);
+
   return (
+    <div style={{ position: "relative", display: "inline-block" }}>
     <canvas
       ref={canvasRef}
       width={CANVAS_W}
@@ -214,5 +283,17 @@ export function Viewport({
         cursor: (onTileClick || onTileHover) ? "crosshair" : "default",
       }}
     />
+    <canvas
+      ref={overlayRef}
+      width={CANVAS_W}
+      height={CANVAS_H}
+      style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        pointerEvents: "none",
+      }}
+    />
+    </div>
   );
 }

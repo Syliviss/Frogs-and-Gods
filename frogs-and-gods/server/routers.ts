@@ -4,50 +4,36 @@ import {
   CreateFrogSchema,
   GetPlayerVisionSchema,
   MoveActionSchema,
-  type FrogSpecies,
 } from "../shared/game.schema";
 import { validateAndQueueMovement } from "./engine/movement";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { adminRouter } from "./routers/admin";
 import {
-  createFrog,
   createGod,
+  createPendingAction,
   getChunksByCoords,
   getEquippedItemsByFrogId,
   getGroundItemsNear,
   getFrogById,
   getFrogByOwnerId,
+  getFrogsByOwnerId,
   getFrogsInBounds,
   getFrogsByInstanceId,
-  getFrogSpriteDataByIds,
   getGodByUserId,
   getInstanceById,
   getItemsInBounds,
   getItemPixelDataByIds,
   getItemsByInstanceId,
+  getLairEntrancesByGridPositions,
   getOverridesByChunks,
   getPredatorsInChunkArea,
   getPredatorsByInstanceId,
+  getRandomGodLairs,
   getRecentWorldLog,
   updateFrog,
 } from "./db";
-import { generateFrogPixelData } from "./assets/frogModels";
 import { CHUNK_SIZE } from "./utils/worldGenerator";
-import type { FrogStats } from "../drizzle/schema";
-
-// ─────────────────────────────────────────────
-// SPECIES STAT MODIFIERS
-// ─────────────────────────────────────────────
-
-const SPECIES_MODIFIERS: Record<FrogSpecies, Partial<FrogStats>> = {
-  BULL_FROG:        { str: 1, maxHp: 1 },
-  TREE_FROG:        { dex: 2 },
-  SHAMEN_FROG:      { maxMana: 1, int: 1 },
-  OLD_FROG:         { maxHp: -2, str: -2, wis: 3, maxMana: 2 },
-  GUIRO_FROG:       { cha: 4 },
-  POISON_DART_FROG: {},
-};
 
 // ─────────────────────────────────────────────
 // APP ROUTER
@@ -72,39 +58,31 @@ export const appRouter = router({
     create: protectedProcedure
       .input(CreateFrogSchema)
       .mutation(async ({ ctx, input }) => {
-        const existing = await getFrogByOwnerId(ctx.user.id);
-        if (existing && !existing.isDead) {
+        // Pre-validate synchronously to give immediate feedback for common case
+        const existingFrogs = await getFrogsByOwnerId(ctx.user.id);
+        if (existingFrogs.length > 0) {
           throw new TRPCError({ code: "CONFLICT", message: "You already have an active Frog." });
         }
 
-        const mods = SPECIES_MODIFIERS[input.species];
-        const base = input.distributedStats;
-        const finalStats: FrogStats = {
-          maxHp:               Math.max(1, base.maxHp   + (mods.maxHp   ?? 0)),
-          maxMana:             Math.max(1, base.maxMana  + (mods.maxMana ?? 0)),
-          str:                 Math.max(1, base.str      + (mods.str     ?? 0)),
-          dex:                 Math.max(1, base.dex      + (mods.dex     ?? 0)),
-          wis:                 Math.max(1, base.wis      + (mods.wis     ?? 0)),
-          int:                 Math.max(1, base.int      + (mods.int     ?? 0)),
-          cha:                 Math.max(1, base.cha      + (mods.cha     ?? 0)),
-          inventoryCapacity:   6,
-          equipCapacity:       3,
-          equippedAttackBonus: 0,
-          equippedDefenseBonus: 0,
-          equippedHpBonus:     0,
-        };
-
-        await createFrog({
-          ownerId:      ctx.user.id,
-          name:         input.name,
-          gridX:        0,
-          gridY:        0,
-          statsJson:    finalStats,
-          currentHp:    finalStats.maxHp,
-          currentMana:  finalStats.maxMana,
-          modelJson:    generateFrogPixelData(input.species),
+        await createPendingAction({
+          actorId:       0,
+          actionType:    "CREATE_FROG",
+          resolveBucket: Math.floor(Date.now() / 500),
+          payload:       {
+            userId:         ctx.user.id,
+            name:           input.name,
+            species:        input.species,
+            distributedStats: input.distributedStats,
+            lairInstanceId: input.lairInstanceId ?? null,
+          },
         });
-        return { success: true };
+        return { queued: true };
+      }),
+
+    getRandomLairs: publicProcedure
+      .input(z.object({ count: z.number().int().min(1).max(10).default(5) }))
+      .query(async ({ input }) => {
+        return getRandomGodLairs(input.count);
       }),
 
     submitMovement: protectedProcedure
@@ -142,9 +120,7 @@ export const appRouter = router({
             getPredatorsByInstanceId(frog.instanceId),
             getItemsByInstanceId(frog.instanceId),
           ]);
-          const groundItems = instanceItems.map(({ pixelData: _px, ...rest }) => rest);
-          const strippedFrogs = instanceFrogs.map(({ modelJson: _m, ...rest }) => rest);
-          return { chunks: { "0:0": grid }, frogs: strippedFrogs, predators: instancePredators, items: groundItems };
+          return { chunks: { "0:0": grid }, frogs: instanceFrogs, predators: instancePredators, items: instanceItems };
         }
 
         const centerCX = Math.floor(frog.gridX / CHUNK_SIZE);
@@ -183,24 +159,13 @@ export const appRouter = router({
           }
         }
 
-        // Strip pixelData from the tick payload — clients fetch it lazily via getItemPixelData
-        const groundItems = itemRows.map(({ pixelData: _px, ...rest }) => rest);
-        // Strip modelJson — clients fetch it lazily via getFrogSpriteData
-        const groundFrogs = frogRows.map(({ modelJson: _m, ...rest }) => rest);
-
-        return { chunks, frogs: groundFrogs, predators: predatorRows, items: groundItems };
+        return { chunks, frogs: frogRows, predators: predatorRows, items: itemRows };
       }),
 
     getItemPixelData: publicProcedure
       .input(z.object({ itemIds: z.array(z.string()).min(1).max(64) }))
       .query(async ({ input }) => {
         return getItemPixelDataByIds(input.itemIds);
-      }),
-
-    getFrogSpriteData: publicProcedure
-      .input(z.object({ frogIds: z.array(z.number().int().positive()).min(1).max(64) }))
-      .query(async ({ input }) => {
-        return getFrogSpriteDataByIds(input.frogIds);
       }),
 
     getEquippedActions: protectedProcedure
@@ -225,6 +190,13 @@ export const appRouter = router({
         if (!frog) return [];
         const nearby = await getGroundItemsNear(frog.gridX, frog.gridY, 1);
         return nearby.map(i => ({ itemId: i.itemId, name: i.name, gridX: i.gridX!, gridY: i.gridY! }));
+      }),
+
+    getLairEntranceAtTile: publicProcedure
+      .input(z.object({ gridX: z.number().int(), gridY: z.number().int() }))
+      .query(async ({ input }) => {
+        const [entry] = await getLairEntrancesByGridPositions([{ gridX: input.gridX, gridY: input.gridY }]);
+        return entry ? { instanceId: entry.instanceId, gridX: entry.gridX, gridY: entry.gridY } : null;
       }),
   }),
 
