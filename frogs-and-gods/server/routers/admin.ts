@@ -32,6 +32,7 @@ import {
   listWorldMapChunks,
   setUserRole,
   stageInstanceTileData,
+  cancelPendingDivUpdateLairForInstance,
   updateFrog,
   updateGod,
 } from "../db";
@@ -630,6 +631,7 @@ export const adminRouter = router({
         resolvedInstanceId = input.instanceId;
       }
 
+      await cancelPendingDivUpdateLairForInstance(resolvedInstanceId);
       const action = await createPendingAction({
         actorId:       input.godId,
         actionType:    "DIV_UPDATE_LAIR",

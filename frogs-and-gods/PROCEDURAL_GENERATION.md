@@ -218,12 +218,14 @@ Key behaviors:
 
 ```ts
 export const TILE_REGISTRY: Record<TileChar, TileDef> = {
-  "≈": { char: "≈", label: "Deep Lake", color: "#1a5f8a", movementCost: 5 },
-  "+": { char: "+", label: "Shore",     color: "#2a7a5a", movementCost: 3 },
-  "~": { char: "~", label: "River",     color: "#1e8870", movementCost: 4 },
-  "@": { char: "@", label: "Lily Pad",  color: "#4a7a20", movementCost: 1 },  // legacy
-  "#": { char: "#", label: "Land",      color: "#5f9a30", movementCost: 2 },
-  "%": { char: "%", label: "Lily Pad",  color: "#4a7a20", movementCost: 1 },  // active
+  "≈": { char: "≈", label: "Deep Lake", color: "#1a5f8a", isWater: true,  isLilyPad: false },
+  "+": { char: "+", label: "Shore",     color: "#2a7a5a", isWater: true,  isLilyPad: false },
+  "~": { char: "~", label: "River",     color: "#1e8870", isWater: true,  isLilyPad: false },
+  "@": { char: "@", label: "Lily Pad",  color: "#4a7a20", isWater: false, isLilyPad: true  },  // legacy
+  "#": { char: "#", label: "Land",      color: "#5f9a30", isWater: false, isLilyPad: false },
+  "%": { char: "%", label: "Lily Pad",  color: "#4a7a20", isWater: false, isLilyPad: true  },  // active
+  "D": { char: "D", label: "Lair Door", color: "#9333ea", isWater: false, isLilyPad: false },
+  "^": { char: "^", label: "Peak",      color: "#a0a0b0", isWater: false, isLilyPad: false },
 };
 ```
 

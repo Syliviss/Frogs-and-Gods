@@ -109,67 +109,96 @@ Where:
 ```
 calculateSnakeIntent()
 │
+├── STARVATION: currentHeartbeat - lastMealTick > 378 AND !wrapping?
+│     YES → deletePredator(id), return
+│
 ├── statsJson.wrapping != null?
-│     YES → HOLD: snake is already constricting — return (no new action queued)
-│     NO  ↓
+│     Target frog still alive? → YES: queue STRIKE at frog, return
+│                               NO:  updatePredator(wrapping: null), fall through
 │
-├── currentHeartbeat - lastMealTick > 18?
-│     NO  → IDLE: satiated — return (snake does not hunt while fed)
-│     YES ↓
+├── Resolve frog list (instance-aware; 3×3 chunk area for overworld)
 │
-├── frogs in chunk?
-│     NO  → IDLE: no prey visible — return
-│     YES ↓
+├── isHungry = currentHeartbeat - lastMealTick > 18
+│   isHungry AND closest frog Chebyshev ≤ 3?
+│     YES → queue STRIKE at closest frog, return
 │
-└── closest frog Chebyshev distance <= 1?
-      YES → queue STRIKE
-      NO  → queue SLITHER toward closest frog
+└── MOVEMENT (always executes):
+      base direction: toward closest frog (if hungry + frogs exist) OR stats.facing
+      50% chance to coil-turn (perpendicular closest to body segment)
+      validate 2-tile path (intermediate + destination both '#')
+      if blocked: try all 8 directions (prefer toward frog when hungry)
+      if ALL blocked: persist random facing, idle
+      queue SLITHER to head + 2·(dx,dy)
 ```
 
 ### Hunger Mechanics
 
 - **Storage column:** `predators.lastMealTick` — stores the **heartbeat number** at which the snake last ate. Heartbeat number = `Math.floor(Date.now() / 10_000)`.
 - **Hungry threshold:** `currentHeartbeat - lastMealTick > 18` (18 heartbeats × 10s = 3 minutes).
-- **Hunger reset:** Only when a frog **dies** from a STRIKE (newHp ≤ 0). A snake that wraps but whose target escapes does NOT reset hunger. Reset happens inside `strike.ts` execute.
-- **Default value:** `lastMealTick = 0` on spawn. In 2026 the current heartbeat number is ~174M, so `174M - 0 >> 18` — newly spawned snakes are immediately hungry. This is intentional.
+- **Hunger effects:** Controls whether the snake STRIKEs and whether it biases movement toward prey. A non-hungry snake still moves every heartbeat (coil wander).
+- **Hunger reset:** Only when a frog dies from a STRIKE. Reset happens inside `strike.ts:execute`.
+- **Spawn value:** Both spawn handlers (`spawn.ts`, `divine_spawn_predator.ts`) write `lastMealTick = Math.floor(Date.now() / 10_000)` — new snakes start with a fresh clock.
+
+| Threshold | Heartbeats since last meal | Wall time | Effect |
+|-----------|---------------------------|-----------|--------|
+| Hungry    | > 18 | ~3 min | Pursues frogs; STRIKEs if within range 3 |
+| Starved   | > 378 | ~63 min | Despawned (silent) |
+
+### Starvation Despawn
+
+Snakes that have been starved for over 1 hour are silently deleted at the start of their next `cycle_start`.
+
+- **Threshold:** `currentHeartbeat - predator.lastMealTick > 378` (18 hungry + 360 starved = ~63 min)
+- **Checked at:** top of `calculateSnakeIntent`, before the wrapping check
+- **Wrap exemption:** A snake actively constricting a frog (`stats.wrapping != null`) is skipped. It finishes the constriction; on the next `cycle_start` after the target frog is gone and `wrapping` is cleared, the starvation check fires
+- **No world log** — the predator row is hard-deleted via `deletePredator(id)` with no broadcast
+- **Pre-existing snakes:** Snakes that existed in the DB before this feature shipped have `lastMealTick = 0` and will despawn on their first `cycle_start`
 
 ### Frog Detection
 
-The snake searches for frogs within its own 16×16 chunk:
+Snakes search a **3×3 chunk area** (48×48 tiles) centered on their chunk:
 ```typescript
-minGX = chunkX * 16;  maxGX = minGX + 15;
-minGY = chunkY * 16;  maxGY = minGY + 15;
+minGX = (chunkX - 1) * 16;  maxGX = (chunkX + 2) * 16 - 1;
+minGY = (chunkY - 1) * 16;  maxGY = (chunkY + 2) * 16 - 1;
 getFrogsInBounds(minGX, maxGX, minGY, maxGY)
 ```
-Dead frogs are filtered (`!frog.isDead`). The closest survivor by Chebyshev distance is targeted. Equidistant frogs: first row returned by DB query wins (no tiebreak).
+**Lair predators** (instanceId != null) use `getFrogsByInstanceId(instanceId)` instead — they cannot see overworld frogs.
 
-### Slither Pathfinding
+Dead frogs are filtered (`!frog.isDead`). The closest survivor by Chebyshev distance is targeted.
 
-One greedy Chebyshev step toward the closest frog per cycle:
-```typescript
-targetGridX = predator.gridX + Math.sign(closestFrog.gridX - predator.gridX)
-targetGridY = predator.gridY + Math.sign(closestFrog.gridY - predator.gridY)
-```
-Diagonal movement is allowed. No pathfinding around obstacles — the snake will path directly through terrain regardless of tile cost. Future improvement: A* or flow-field if obstacle avoidance is needed.
+### Movement Model
+
+Snakes move **2 tiles per SLITHER** in an 8-directional unit direction (cardinal + diagonal):
+
+- **Terrain restriction:** Both the intermediate tile (head + 1 step) and the destination must be `#` (land). Peaks, water, lily pads, and doors block the move.
+- **Persistent facing:** `statsJson.facing = {dx, dy}` stores the current unit direction and is updated by each successful SLITHER.
+- **Coil turns:** 50% chance per heartbeat. Pick the 90° perpendicular direction (`left: (-dy, dx)`, `right: (dy, -dx)`) whose 2-tile destination is closest (by Chebyshev) to a body segment. If neither perpendicular path is walkable, skip the turn.
+- **Blocked fallback:** If the chosen direction's 2-tile path is blocked, try all 8 unit directions (preferring toward the frog when hungry). If all are blocked, persist a random facing and idle this heartbeat.
+- **Always moves:** Even when not hungry, the snake slithers in a wandering coil pattern every heartbeat.
 
 ### Segment Layout
 
 ```
-Snake body: [HEAD (gridX/gridY)] → [segments[0]] → [segments[1] = tail]
+Snake body: [HEAD (gridX/gridY)] → [segments[0] = middle] → [segments[1] = tail]
 ```
+
+After a 2-tile SLITHER in direction `(dx, dy)`:
+- New head = `head + (2·dx, 2·dy)`
+- New `segments[0]` = `head + (dx, dy)` (intermediate tile)
+- New `segments[1]` = old head position → **tail always ends where head was**
 
 On spawn, initialize coiled (all segments at same position):
 ```typescript
 statsJson: {
   speed: 5,
   segments: [
-    { x: spawnX, y: spawnY },   // body1 = coiled at head
-    { x: spawnX, y: spawnY },   // body2 = coiled at head
+    { x: spawnX, y: spawnY },
+    { x: spawnX, y: spawnY },
   ],
   wrapping: null,
+  facing: null,   // set on first SLITHER
 }
 ```
-The body spreads naturally as the snake slithers. On each SLITHER: current `gridX/gridY` → segments[0], old segments[0] → segments[1] (tail drops off).
 
 ---
 
@@ -195,11 +224,11 @@ The body spreads naturally as the snake slithers. On each SLITHER: current `grid
 ```typescript
 interface PredatorStats {
   speed?:     number;                           // 1–10; initiative formula input. Default: 5
-  segments?:  Array<{ x: number; y: number }>; // Body tiles. [0] = body1, [1] = tail
+  segments?:  Array<{ x: number; y: number }>; // Body tiles. [0] = middle, [1] = tail
   wrapping?:  { targetFrogId: number } | null; // Active constriction. null = not wrapping
+  facing?:    { dx: number; dy: number };       // Persisted 8-dir unit vector; set on first SLITHER
 
-  // Ghost fields — defined but never written or read:
-  path?:      number[][];    // Reserved for future pathfinding (never used)
+  // Ghost field — defined but never written or read:
   mutations?: string[];      // Future mutation flags (never used)
 
   [key: string]: unknown;    // Open for future entity-type-specific fields

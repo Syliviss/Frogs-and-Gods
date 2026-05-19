@@ -130,9 +130,16 @@ export function LairTab() {
     setError(null);
     setSuccessMsg(null);
     const blank = BLANK_GRID();
-    blank[8]![8] = "D"; // place default D so it's valid from the start
+    blank[8]![8] = "D";
     stageMut.mutate({ godId: selectedGodId, tileDataJson: blank });
     setLocalGrid(blank);
+  }
+
+  function handleCreateAndSubmit() {
+    if (!selectedGodId || dCount !== 1) return;
+    setError(null);
+    setSuccessMsg(null);
+    stageMut.mutate({ godId: selectedGodId, tileDataJson: localGrid });
   }
 
   function handleSubmitLayout() {
@@ -307,13 +314,13 @@ export function LairTab() {
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <Button
               variant="outline"
-              disabled={!selectedGodId || stageMut.isPending || (selectedInstanceId !== null && dCount !== 1)}
-              onClick={selectedInstanceId ? handleSubmitLayout : handleCreateLair}
+              disabled={!selectedGodId || stageMut.isPending || dCount !== 1}
+              onClick={selectedInstanceId ? handleSubmitLayout : handleCreateAndSubmit}
               style={{
                 alignSelf: "flex-start",
                 fontSize: 12,
-                borderColor: (selectedInstanceId === null || dCount === 1) ? "#4ade80" : "#374151",
-                color: (selectedInstanceId === null || dCount === 1) ? "#4ade80" : "#6b7280",
+                borderColor: dCount === 1 ? "#4ade80" : "#374151",
+                color: dCount === 1 ? "#4ade80" : "#6b7280",
               }}
             >
               {stageMut.isPending ? "Queuing…" : selectedInstanceId ? "Submit Layout Update" : "Create & Submit Layout"}

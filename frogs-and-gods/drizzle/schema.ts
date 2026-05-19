@@ -339,6 +339,8 @@ export interface PredatorStats {
   speed?:      number;
   /** Active constriction target. Null = snake is free to hunt. */
   wrapping?:   { targetFrogId: number } | null;
+  /** Persisted 8-direction unit vector {dx,dy} ∈ {-1,0,1}². Set on first SLITHER, updated each move. */
+  facing?:     { dx: number; dy: number };
   [key: string]: unknown;
 }
 

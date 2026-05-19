@@ -53,17 +53,7 @@ Code that violates the "never import from db in action handlers" architectural r
 
 ### `_conditionUtils.ts` — direct DB writes, not yet migrated
 
-**File:** `server/actions/_conditionUtils.ts`
-
-`rollConditionCheck()` here is the original async version of the condition check. It handles the full WRAP escape mechanic:
-- On successful escape (max(str, dex) >= 15): directly calls `updatePredator()` and `updateFrog()` from `../db` to clear both `wrapping` and `wrappedBy` fields
-- These are direct DB writes — they bypass `SimulatedState` and `UpdateInstruction[]`
-
-**What this means:** The wrap escape path (`_conditionUtils.ts`) and the new movement validation path (`_utils.ts` + SimulatedState) are inconsistent. The `_utils.ts:rollConditionCheck(frog)` only checks if the frog is wrapped and returns a FUMBLE — it does not attempt the escape roll or clear the condition. The full escape mechanic is only implemented in `_conditionUtils.ts`.
-
-If `_moveHelper.ts` is the only thing using `rollConditionCheck`, the wrap escape roll is currently unreachable in the new path. This needs investigation.
-
-**Migration path:** Implement wrap escape inside `_moveHelper.ts:validate()` using SimulatedState mutations and `out.push({ type: "FROG_UPDATE", ... })` + `out.push({ type: "PREDATOR_UPDATE", ... })`.
+**Resolved:** The wrap escape mechanic is fully implemented in `server/actions/_utils.ts:rollConditionCheck()`. It uses `SimulatedState` mutations and `UpdateInstruction[]` to atomically clear both `frog.statsJson.wrappedBy` and `predator.statsJson.wrapping` on a successful escape roll. This entry was written before the migration was completed. No ghost code remains here.
 
 ---
 
@@ -128,8 +118,9 @@ Fields typed in the `PredatorStats` interface that are never written or read any
 
 | Field | Type | Defined in | Status |
 |-------|------|------------|--------|
-| `statsJson.path` | `number[][]` | `server/actions/_types.ts` (PredatorStats) | Reserved for future pathfinding. No code writes it. No code reads it. |
-| `statsJson.mutations` | `string[]` | `server/actions/_types.ts` (PredatorStats) | Reserved for future entity mutations. Never used. |
+| `statsJson.mutations` | `string[]` | `drizzle/schema.ts` (PredatorStats) | Reserved for future entity mutations. Never used. |
+
+> `statsJson.path` was removed during the snake movement overhaul — superseded by `statsJson.facing`.
 
 ---
 

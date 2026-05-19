@@ -41,8 +41,8 @@ export const strikeHandler: PredatorActionHandler = {
     const stats = (predator.statsJson ?? {}) as PredatorStats;
 
     const dist = chebyshevDistance(predator.gridX, predator.gridY, ctx.targetGridX, ctx.targetGridY);
-    if (dist > 1) {
-      return { success: false, error: `STRIKE range is 1 tile (got ${dist}).` };
+    if (dist > 3) {
+      return { success: false, error: `STRIKE range is 3 tiles (got ${dist}).` };
     }
 
     const tileChar = getTileChar(ctx.targetGridX, ctx.targetGridY, state);

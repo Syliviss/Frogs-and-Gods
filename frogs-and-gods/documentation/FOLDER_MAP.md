@@ -248,8 +248,8 @@ Code imported by both `client/` and `server/`. Zero side effects, no DB, no impo
 |------|---------|
 | `game.schema.ts` | All Zod schemas and inferred TypeScript types (Frog, Item, Chunk, ActionSchema, `CreateGodPayloadSchema`, etc.) |
 | `divinePowers.ts` | Hardcoded list of selectable god powers (`DIVINE_POWER_LIST`) — source of truth for god creation UI and CREATE_GOD validation |
-| `tileRegistry.ts` | `TILE_REGISTRY` — tile char → label, color, movementCost |
-| `movement.ts` | Pure movement math — `movementBudget(dex)`, `chebyshevDistance()`, `calculateRemainingMove()` |
+| `tileRegistry.ts` | `TILE_REGISTRY` — tile char → label, color, isWater, isLilyPad |
+| `movement.ts` | Pure movement math — `chebyshevDistance()`, `getHopPath()`, `getLineTiles()`, `OPEN_WATER_TILES`, `SWIM_PASSABLE_TILES` |
 | `movement.test.ts` | Movement math unit tests |
 | `const.ts` | Shared constants (CHUNK_SIZE, WORLD_SEED, etc.) |
 | `types.ts` | Shared TypeScript utility types |

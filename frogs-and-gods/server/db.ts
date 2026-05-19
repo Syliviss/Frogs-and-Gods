@@ -547,6 +547,18 @@ export async function createPendingAction(data: InsertPendingAction): Promise<Pe
   return row!;
 }
 
+export async function cancelPendingDivUpdateLairForInstance(instanceId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(pendingActions)
+    .set({ status: "cancelled", resolvedAt: new Date() })
+    .where(and(
+      eq(pendingActions.status, "pending"),
+      eq(pendingActions.actionType, "DIV_UPDATE_LAIR"),
+      sql`payload->>'instanceId' = ${instanceId.toString()}`,
+    ));
+}
+
 export async function getPendingActionsToResolve(currentBucket: number): Promise<PendingAction[]> {
   const db = await getDb();
   if (!db) return [];
@@ -676,15 +688,6 @@ export async function updatePredator(
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   await db.update(predators).set(data).where(eq(predators.id, id));
-}
-
-export async function getWrappingPredators(): Promise<Predator[]> {
-  const db = await getDb();
-  if (!db) return [];
-  return db
-    .select()
-    .from(predators)
-    .where(sql`stats_json->>'wrapping' IS NOT NULL`);
 }
 
 export async function listRecentPredators(limit: number): Promise<Predator[]> {

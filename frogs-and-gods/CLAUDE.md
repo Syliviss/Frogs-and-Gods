@@ -74,7 +74,7 @@ Client hooks: `useWorldLog` and `useEngineLog` in `client/src/hooks/` — both o
 
 `server/utils/worldGenerator.ts` — deterministic Perlin noise (`fastnoise-lite`, seed 42). `generateChunk(chunkX, chunkY, WORLD_SEED)` returns a `string[][]` of tile chars (`≈ + ~ @ #`). Same inputs always produce the same grid.
 
-Tile definitions (label, color, movementCost) live in `shared/tileRegistry.ts`. `TILE_REGISTRY` is the single source of truth used by both the canvas renderer and the movement system.
+Tile definitions (label, color, isWater, isLilyPad) live in `shared/tileRegistry.ts`. `TILE_REGISTRY` is the single source of truth used by both the canvas renderer and the movement system.
 
 ### Isometric Renderer
 
@@ -98,8 +98,8 @@ worldY = round(v / 8 - u / 16)
 
 ### Movement System
 
-`shared/movement.ts` — pure functions: `movementBudget(dex)`, `chebyshevDistance()`, `calculateRemainingMove()`.
-`server/engine/movement.ts` — `validateAndQueueMovement()` — validates range + cost, writes a `pending_actions` row.
+`shared/movement.ts` — pure functions: `chebyshevDistance()`, `getHopPath()`, `getLineTiles()`, plus sets `OPEN_WATER_TILES` and `SWIM_PASSABLE_TILES`.
+`server/engine/movement.ts` — `validateAndQueueMovement()` — validates range, writes a `pending_actions` row.
 `server/engine/tickProcessor.ts` — `processMovementActions()` — re-validates and applies positions on heartbeat resolution. Double-validation pattern is intentional.
 
 ### Client Routing

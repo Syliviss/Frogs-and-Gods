@@ -181,9 +181,9 @@ applyDamage(state, out, "PREDATOR", predatorId, 7);   // 7 flat damage
 applyDamage(state, out, "FROG",     frogId,     dmg); // variable damage
 ```
 
-### `makeMoveHandler(actionType)` — `server/actions/_moveHelper.ts`
+### Movement handlers — `server/actions/_moveHelper.ts`
 
-Factory function that returns a complete `ActionHandler` for a movement action type. `step.ts` and `hop.ts` both export `makeMoveHandler("STEP")` and `makeMoveHandler("HOP")` respectively. Uses `rollConditionCheck`, `checkItemFumble`, `getTerrainAt`, and `calculateRemainingMove` internally.
+Three separate `ActionHandler` exports: `stepHandler`, `hopHandler`, `swimHandler`. Each is imported directly by `step.ts`, `hop.ts`, and `swim.ts`. All three use `rollConditionCheck`, `checkItemFumble`, and `getTerrainAt` from `_utils.ts`.
 
 ---
 
@@ -310,7 +310,11 @@ Factory function that returns a complete `ActionHandler` for a movement action t
 | **File** | `server/actions/slither.ts` |
 | **Type** | movement |
 | **Actor** | Snake |
-| **Key rules** | Moves head 1 Chebyshev step toward target. Shifts body: current head position → segments[0], segments[0] → segments[1] (tail dropped). Updates `gridX`, `gridY`, `chunkX`, `chunkY`. |
+| **Distance** | Exactly **2 tiles** (Chebyshev 2 in a unit direction × 2) |
+| **Terrain** | Both the intermediate tile (head + 1 step) and destination must be `#` (land). Any other tile (`^`, `≈`, `~`, `+`, `@`, `%`, `D`) blocks the move. |
+| **Body shift** | intermediate → new `segments[0]`; old head → new `segments[1]` (tail). The tail always ends up where the head was. |
+| **Facing** | Derived from the target coords in `execute()` and persisted as `statsJson.facing = {dx, dy}`. |
+| **Key rules** | Direction must be a pure unit vector × 2 — e.g. `(2,0)`, `(2,2)`, `(0,-2)`. L-shapes like `(2,1)` are rejected. Updates `gridX`, `gridY`, `chunkX`, `chunkY`. |
 
 ### STRIKE
 
@@ -319,8 +323,9 @@ Factory function that returns a complete `ActionHandler` for a movement action t
 | **File** | `server/actions/strike.ts` |
 | **Type** | combat |
 | **Actor** | Snake |
+| **Range** | Chebyshev ≤ **3** tiles |
 | **Damage** | 7 flat (no variance) |
-| **Key rules** | Target frog must be adjacent (Chebyshev 1). On hit: applies 7 damage. If target dies (`newHp <= 0`): resets snake's `lastMealTick` to current heartbeat number (hunger clock reset). Optimistically sets `predator.statsJson.wrapping` — the WRAP action canonically confirms and enforces the constriction. |
+| **Key rules** | Target tile must not be deep water (`≈`). On hit: applies 7 damage. If target dies: resets snake's `lastMealTick` (hunger clock reset), clears `wrapping`. If target survives: queues WRAP on the next sub-tick bucket and sets `predator.statsJson.wrapping` optimistically. Wrap applies at any range up to 3 tiles. |
 
 ### WRAP
 
