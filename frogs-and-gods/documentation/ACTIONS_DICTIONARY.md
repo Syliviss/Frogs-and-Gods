@@ -312,7 +312,7 @@ Three separate `ActionHandler` exports: `stepHandler`, `hopHandler`, `swimHandle
 | **Actor** | Snake |
 | **Distance** | Exactly **2 tiles** (Chebyshev 2 in a unit direction × 2) |
 | **Terrain** | Both the intermediate tile (head + 1 step) and destination must be `#` (land). Any other tile (`^`, `≈`, `~`, `+`, `@`, `%`, `D`) blocks the move. |
-| **Body shift** | intermediate → new `segments[0]`; old head → new `segments[1]` (tail). The tail always ends up where the head was. |
+| **Body shift** | intermediate → new `segments[0]`. **On a straight move:** old head → new `segments[1]` (body stays collinear). **On a turn** (new direction ≠ `statsJson.facing`): old `segments[0]` → new `segments[1]` (tail stays where it was, forming an L-shaped body). |
 | **Facing** | Derived from the target coords in `execute()` and persisted as `statsJson.facing = {dx, dy}`. |
 | **Key rules** | Direction must be a pure unit vector × 2 — e.g. `(2,0)`, `(2,2)`, `(0,-2)`. L-shapes like `(2,1)` are rejected. Updates `gridX`, `gridY`, `chunkX`, `chunkY`. |
 
@@ -323,9 +323,9 @@ Three separate `ActionHandler` exports: `stepHandler`, `hopHandler`, `swimHandle
 | **File** | `server/actions/strike.ts` |
 | **Type** | combat |
 | **Actor** | Snake |
-| **Range** | Chebyshev ≤ **3** tiles |
+| **Range** | Chebyshev ≤ **5** tiles |
 | **Damage** | 7 flat (no variance) |
-| **Key rules** | Target tile must not be deep water (`≈`). On hit: applies 7 damage. If target dies: resets snake's `lastMealTick` (hunger clock reset), clears `wrapping`. If target survives: queues WRAP on the next sub-tick bucket and sets `predator.statsJson.wrapping` optimistically. Wrap applies at any range up to 3 tiles. |
+| **Key rules** | Target tile must not be water (`≈ + ~`) or a lily pad (`@ %`). On hit: applies 7 damage. If target dies: resets snake's `lastMealTick` (hunger clock reset), clears `wrapping`. If target survives: queues WRAP on the next sub-tick bucket and sets `predator.statsJson.wrapping` optimistically. Wrap applies at any range up to 5 tiles. |
 
 ### WRAP
 
@@ -334,7 +334,7 @@ Three separate `ActionHandler` exports: `stepHandler`, `hopHandler`, `swimHandle
 | **File** | `server/actions/wrap.ts` |
 | **Type** | status |
 | **Actor** | Snake |
-| **Key rules** | Sets `predator.statsJson.wrapping = { targetFrogId }` and `frog.statsJson.wrappedBy = predatorId` canonically. Both fields must be cleared together. A wrapped frog that attempts any action triggers `rollConditionCheck()` — **escape roll: `Math.max(frog.str, frog.dex) >= 15`**. Failed escape = FUMBLE (turn consumed, frog still wrapped). A frog with both STR < 15 and DEX < 15 cannot escape without stat growth or divine intervention. |
+| **Key rules** | On success: snake body **teleports** to 3 connected `#` tiles adjacent to the target frog — head placed on the nearest **cardinal** neighbor (N/S/E/W) to the snake's original position, then 2 more clockwise `[cardinal → diagonal → cardinal]`, forming a guaranteed L-shape around the frog. Sets `predator.statsJson.wrapping = { targetFrogId }` and `frog.statsJson.wrappedBy = predatorId` canonically. Both fields must be cleared together. A wrapped frog that attempts any action triggers `rollConditionCheck()` — **escape roll: `Math.max(frog.str, frog.dex) >= 15`**. Failed escape = FUMBLE (turn consumed, frog still wrapped). A frog with both STR < 15 and DEX < 15 cannot escape without stat growth or divine intervention. |
 
 ---
 

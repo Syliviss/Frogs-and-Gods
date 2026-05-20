@@ -115,11 +115,12 @@ calculateSnakeIntent()
 ├── statsJson.wrapping != null?
 │     Target frog still alive? → YES: queue STRIKE at frog, return
 │                               NO:  updatePredator(wrapping: null), fall through
+│     (On successful WRAP: snake teleports body to 3 adjacent '#' tiles around frog)
 │
 ├── Resolve frog list (instance-aware; 3×3 chunk area for overworld)
 │
 ├── isHungry = currentHeartbeat - lastMealTick > 18
-│   isHungry AND closest frog Chebyshev ≤ 3?
+│   isHungry AND closest frog Chebyshev ≤ 5?
 │     YES → queue STRIKE at closest frog, return
 │
 └── MOVEMENT (always executes):
@@ -141,7 +142,7 @@ calculateSnakeIntent()
 
 | Threshold | Heartbeats since last meal | Wall time | Effect |
 |-----------|---------------------------|-----------|--------|
-| Hungry    | > 18 | ~3 min | Pursues frogs; STRIKEs if within range 3 |
+| Hungry    | > 18 | ~3 min | Pursues frogs; STRIKEs if within range 5 |
 | Starved   | > 378 | ~63 min | Despawned (silent) |
 
 ### Starvation Despawn

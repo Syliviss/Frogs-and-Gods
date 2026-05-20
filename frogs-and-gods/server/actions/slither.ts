@@ -75,11 +75,16 @@ export const slitherHandler: PredatorActionHandler = {
       y: predator.gridY + dy,
     };
 
-    // New body: [intermediate, old head] — tail is now where the head was
-    const newSegments: Array<{ x: number; y: number }> = [
-      intermediate,
-      { x: predator.gridX, y: predator.gridY },
-    ];
+    // On a turn: keep old seg0 as new tail so the bend stays visible (L-shape).
+    // On a straight move: tail becomes old head (collinear body).
+    const oldFacing = stats.facing;
+    const isTurn = oldFacing != null && (oldFacing.dx !== dx || oldFacing.dy !== dy);
+    const oldSeg0 = stats.segments?.[0];
+    const newSeg1 = (isTurn && oldSeg0)
+      ? oldSeg0
+      : { x: predator.gridX, y: predator.gridY };
+
+    const newSegments: Array<{ x: number; y: number }> = [intermediate, newSeg1];
 
     const changes = {
       gridX:     ctx.targetGridX,

@@ -211,7 +211,7 @@ export async function calculateSnakeIntent(predator: Predator): Promise<void> {
       const d = chebyshevDistance(head.x, head.y, frog.gridX, frog.gridY);
       if (d < closestDist) { closestFrog = frog; closestDist = d; }
     }
-    if (closestDist <= 3) {
+    if (closestDist <= 5) {
       await queueSnakeAction(predator, "STRIKE", closestFrog.gridX, closestFrog.gridY, { targetFrogId: closestFrog.id }, stats);
       return;
     }

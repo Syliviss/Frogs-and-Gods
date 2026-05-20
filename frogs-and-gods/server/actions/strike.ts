@@ -1,6 +1,7 @@
 import { chebyshevDistance } from "../../shared/movement";
 import { CHUNK_SIZE } from "../utils/worldGenerator";
 import { pushActionLog } from "../engine/actionLog";
+import { getTileDef } from "../../shared/tileRegistry";
 import type { PredatorActionContext, PredatorActionResult, PredatorActionHandler } from "./_predator_types";
 import type { Predator, PredatorStats } from "../../drizzle/schema";
 import type { TileChar } from "../../shared/game.schema";
@@ -22,7 +23,6 @@ import { getEntitiesAt, applyDamage } from "./_utils";
 // Double-validation: tile type and frog presence are re-checked at execution time.
 
 const STRIKE_DAMAGE = 7;
-const DEEP_WATER: TileChar = "≈";
 
 function getTileChar(gridX: number, gridY: number, state: SimulatedState): TileChar {
   const chunkX  = Math.floor(gridX / CHUNK_SIZE);
@@ -41,13 +41,14 @@ export const strikeHandler: PredatorActionHandler = {
     const stats = (predator.statsJson ?? {}) as PredatorStats;
 
     const dist = chebyshevDistance(predator.gridX, predator.gridY, ctx.targetGridX, ctx.targetGridY);
-    if (dist > 3) {
-      return { success: false, error: `STRIKE range is 3 tiles (got ${dist}).` };
+    if (dist > 5) {
+      return { success: false, error: `STRIKE range is 5 tiles (got ${dist}).` };
     }
 
     const tileChar = getTileChar(ctx.targetGridX, ctx.targetGridY, state);
-    if (tileChar === DEEP_WATER) {
-      return { success: false, error: "Snake cannot strike targets in deep water." };
+    const tileDef = getTileDef(tileChar);
+    if (tileDef?.isWater || tileDef?.isLilyPad) {
+      return { success: false, error: "Snake cannot strike targets on water or lily pads." };
     }
 
     return { success: true };
@@ -55,8 +56,9 @@ export const strikeHandler: PredatorActionHandler = {
 
   execute(ctx: PredatorActionContext, predator: Predator, state: SimulatedState, out: UpdateInstruction[]): PredatorActionResult {
     const tileChar = getTileChar(ctx.targetGridX, ctx.targetGridY, state);
-    if (tileChar === DEEP_WATER) {
-      return { success: false, error: "Target tile is deep water at resolution — strike cancelled." };
+    const tileDef = getTileDef(tileChar);
+    if (tileDef?.isWater || tileDef?.isLilyPad) {
+      return { success: false, error: "Target tile is water or lily pad at resolution — strike cancelled." };
     }
 
     const frogsHere = getEntitiesAt(state, ctx.targetGridX, ctx.targetGridY).frogs;
