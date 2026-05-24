@@ -6,6 +6,7 @@ import { ActionLog } from "@/components/ActionLog";
 import { useTickSync } from "@/hooks/useTickSync";
 import { useActionLogs } from "@/hooks/useActionLogs";
 import { spriteManager, SpriteManager } from "@/lib/SpriteManager";
+import { flattenPredators } from "@/lib/viewportUtils";
 
 const frogSpriteManager = new SpriteManager();
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -84,15 +85,9 @@ export function GodViewTab() {
   // ── Entities for Viewport ─────────────────────────────
   const entities = useMemo(() => {
     if (!vision) return [];
-    const predatorTiles = vision.predators.flatMap((p) => {
-      const stats = p.statsJson as { segments?: { x: number; y: number }[] } | null;
-      const head = { gridX: p.gridX, gridY: p.gridY, type: "predator" as const, id: p.id };
-      const body = (stats?.segments ?? []).map((s) => ({ gridX: s.x, gridY: s.y, type: "predator" as const, id: p.id }));
-      return [head, ...body];
-    });
     return [
       ...vision.frogs.map((f) => ({ gridX: f.gridX, gridY: f.gridY, type: "frog" as const, id: f.id })),
-      ...predatorTiles,
+      ...flattenPredators(vision.predators),
     ];
   }, [vision, spriteVersion]);
 

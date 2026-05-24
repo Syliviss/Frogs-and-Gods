@@ -50,12 +50,12 @@ export const slitherHandler: PredatorActionHandler = {
     const intermY = predator.gridY + dy;
 
     const intermChar = getTerrainAt(state, intermX, intermY);
-    if (intermChar !== "#") {
+    if (intermChar !== "#" && intermChar !== "o" && intermChar !== "T") {
       return { success: false, error: `SLITHER intermediate tile (${intermX},${intermY}) is not land (got '${intermChar}').` };
     }
 
     const destChar = getTerrainAt(state, ctx.targetGridX, ctx.targetGridY);
-    if (destChar !== "#") {
+    if (destChar !== "#" && destChar !== "o" && destChar !== "T") {
       return { success: false, error: `SLITHER destination tile (${ctx.targetGridX},${ctx.targetGridY}) is not land (got '${destChar}').` };
     }
 

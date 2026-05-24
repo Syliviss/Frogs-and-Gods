@@ -30,7 +30,7 @@ Navigational reference for the project. Every folder and notable file, one line 
 | File | Purpose |
 |------|---------|
 | `main.tsx` | React entrypoint — tRPC provider (httpBatchLink + superjson), router mount |
-| `App.tsx` | wouter router: `/` → Admin, `/game` → GamePage, `/create-frog` → FrogCreationForm, `/map-studio` → MapStudio |
+| `App.tsx` | wouter router: `/` → Admin, `/create-frog` → FrogCreationForm, `/map-studio` → MapStudio, `/testing-ground` → TestingGround |
 | `index.css` | Global styles — dark fantasy theme, Tailwind base |
 
 ### `client/src/components/`
@@ -40,6 +40,7 @@ Navigational reference for the project. Every folder and notable file, one line 
 | `Viewport.tsx` | HTML5 Canvas isometric renderer — 3×3 chunk view, click detection, item + frog sprite overlay, `frogSpriteManager` prop |
 | `ActionBar.tsx` | Action button row — STEP/HOP/PICKUP/CROAK universal buttons, item-granted actions, TARGETING mode UI for SWING; `onCroak` prop dispatches CROAK action |
 | `ActionLog.tsx` | Scrolling feed of resolved action events |
+| `FrogStatPanel.tsx` | Frog stat sidebar — pixel portrait canvas, HP/mana/breath bars, attribute display, equipped item icons |
 | `ErrorBoundary.tsx` | React error boundary for crash isolation |
 
 #### `client/src/components/admin/`
@@ -83,6 +84,7 @@ Navigational reference for the project. Every folder and notable file, one line 
 |------|---------|
 | `trpc.ts` | tRPC React client setup — `createTRPCReact<AppRouter>()`, httpBatchLink to `/api/trpc` |
 | `SpriteManager.ts` | Exported `SpriteManager` class + default `spriteManager` singleton — bakes pixel_data/modelJson arrays into off-screen HTMLCanvasElements; two instances used (one for items, one for frogs) to avoid ID collisions |
+| `viewportUtils.ts` | `flattenPredators()` — single source of truth for expanding predators into per-tile viewport entities; handles GOLEM 3×3, SNAKE segments, future types |
 | `utils.ts` | Tailwind class merge utility (cn) |
 
 ### `client/src/pages/`
@@ -90,7 +92,6 @@ Navigational reference for the project. Every folder and notable file, one line 
 | File | Purpose |
 |------|---------|
 | `Admin.tsx` | Dev console — tabbed UI: Users, Frogs, Gods, God's View, World, Vision, Items, Inventory, Enemies, God's Lair, WorldLog, Engine |
-| `GamePage.tsx` | Player-facing game view (functional but not yet live — see `THE_VOID_INVENTORY.md`); queries `frog.getLairEntranceAtTile` to show lair `instanceId` in the ActionBar when a D tile is selected |
 | `FrogCreationForm.tsx` | Character creation — lair selection step (5 random god lairs via `frog.getRandomLairs`), name/species/stat distribution, async "Hatching..." state that polls ENGINE_TICK / SUBTICK_LOGS |
 | `NotFound.tsx` | 404 page |
 | `TestingGround.tsx` | Dev scratch page — linked from admin UX dropdown |
@@ -163,6 +164,7 @@ Every action handler lives here. The central registry is `index.ts`.
 | `slither.ts` | SLITHER — predator: move head 1 tile, shift body segments |
 | `strike.ts` | STRIKE — predator: 7 flat damage, chains to WRAP on kill |
 | `wrap.ts` | WRAP — predator: canonical constriction set + escape roll |
+| `crush.ts` | CRUSH — predator: golem deals 15 dmg across 3-path wedge, repositions on kill |
 | `ACTIONS.md` | Partial in-source registry (outdated — see `documentation/ACTIONS_DICTIONARY.md`) |
 
 ### `server/engine/`
@@ -188,6 +190,7 @@ AI predator brains. Each file calculates intents and queues `pending_actions` �
 |------|---------|
 | `index.ts` | Entity registry — `processEntityIntents()`, routes by `enemyType` |
 | `snake.ts` | Snake FSM — hunger check, frog detection, SLITHER/STRIKE intent calculation |
+| `golem.ts` | Golem FSM — starvation check, crush-range scan, CRUSH intent calculation |
 
 ### `server/routers/`
 
@@ -209,13 +212,23 @@ Modular procedural generation pipeline. All logic moved here from the old `serve
 
 | File | Purpose |
 |------|---------|
-| `index.ts` | Public API — re-exports `generateChunk`, `MACRO_GRID`, `WORLD_SEED`, `POI_REGISTRY` etc. |
-| `generator.ts` | `generateChunk(cx, cy, seed, macroGrid)` — orchestrates all 4 layers, returns `{grid, biome}` |
+| `index.ts` | Public API — re-exports `generateChunk`, `MACRO_GRID`, `WORLD_SEED`, `BIOME_REGISTRY` etc. |
+| `generator.ts` | `generateChunk(cx, cy, seed, macroGrid)` — orchestrates the terrain layers, returns `{grid, biome}` |
 | `macroLayer.ts` | Wolfram ECA + radial mask; `buildMacroGrid()`, `isChunkSolid()`, pre-computed `MACRO_GRID` |
 | `biomeMap.ts` | `BiomeDef`, `BIOME_REGISTRY`, `getBiomeForChunk()` — Perlin-based biome assignment per chunk |
 | `tileResolver.ts` | `resolveTile()` — maps noise + biome thresholds → tile char; handles `%` lily pad scatter |
-| `poiRegistry.ts` | `POI_REGISTRY` array of `PoiDef` objects; `stampPois(cx, cy, grid)` — bake-time tile overrides |
-| `poiTypes.ts` | `PoiDef` interface and `PoiType` union type |
+
+### `server/poi/`
+
+Point of Interest system — procedurally-placed, stateful encounter locations. See
+`documentation/POI_SYSTEM.md` and `documentation/POI_DICTIONARY.md`.
+
+| File | Purpose |
+|------|---------|
+| `types.ts` | `PoiTypeDef`, `PoiLayoutTile`, `PredatorSpawnSpec` interfaces |
+| `registry.ts` | `POI_TYPE_REGISTRY` — every POI type definition; `getPoiTypeDef()` |
+| `worldgen.ts` | `detectPois()` + `stampPoiLayouts()` — bake-time POI placement and layout stamping |
+| `processor.ts` | `runPoiHeartbeatPass()` — the per-heartbeat POI inhale → process → exhale |
 
 ### `server/utils/`
 
@@ -263,7 +276,7 @@ Database schema and migrations. Managed by Drizzle Kit (`yarn db:push`).
 
 | File | Purpose |
 |------|---------|
-| `schema.ts` | Full Drizzle table definitions + enums (15 core tables — includes instances, lairEntrances) |
+| `schema.ts` | Full Drizzle table definitions + enums (16 core tables — includes instances, lairEntrances, pointsOfInterest) |
 | `relations.ts` | Drizzle relation definitions |
 | `0000_massive_the_anarchist.sql` | Initial migration — all base tables |
 | `0001_add_pixel_data.sql` | Added pixel_data JSONB column to items |
@@ -284,7 +297,7 @@ Standalone scripts. **Not included in `tsconfig.json`** — run with `npx tsx sc
 
 | File | Purpose |
 |------|---------|
-| `seedWorld.ts` | Full 315×315 chunk world seeder (−157..157, 99,225 chunks). Upserts in batches of 500. Supports `--dry-run`. |
+| `seedWorld.ts` | Full 315×315 chunk world seeder (−157..157, 99,225 chunks). Three-pass: detect POIs → stamp + upsert chunks → insert `points_of_interest` rows. Supports `--dry-run`. |
 | `backfillFrogSprites.ts` | One-time backfill — sets `model_json` to the BULL_FROG sprite for any frog row with `model_json IS NULL`. Run with `npx tsx scripts/backfillFrogSprites.ts`. |
 
 ---
@@ -297,6 +310,8 @@ Standalone scripts. **Not included in `tsconfig.json`** — run with `npx tsx sc
 | `ACTION_PATH.md` | Full action lifecycle: UI button → pending_actions → heartbeat resolution → client |
 | `ACTIONS_DICTIONARY.md` | Dev reference for every action handler (frog, predator, god) |
 | `ENTITIES_DICTIONARY.md` | Dev reference for predator AI system and entity brains |
+| `POI_SYSTEM.md` | Point of Interest system — table, status model, bake pipeline, heartbeat pass |
+| `POI_DICTIONARY.md` | POI type catalog + authoring guide (what the server/DB expect) |
 | `THE_VOID_INVENTORY.md` | Ghost code, enum stubs, architectural violations, unimplemented planned features |
 | `SCALABILITY_ARCHITECTURE.md` | Bottleneck map by player count, index audit, scaling roadmap |
 

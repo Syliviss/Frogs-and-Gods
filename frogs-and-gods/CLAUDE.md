@@ -55,12 +55,12 @@ Migrations are in `drizzle/000N_*.sql`. Run `yarn db:push` to generate and apply
 
 ### The Heartbeat Engine
 
-`server/engine/heartbeat.ts` — `HeartbeatEngine extends EventEmitter`. Single instance created in `server/_core/index.ts` and passed to the WebSocket server.
+`server/engine/heartbeat.ts` — `HeartbeatEngine extends EventEmitter`. Single instance exported from `heartbeat.ts`; imported directly by `server/websockets/socket.ts` which wires up all event listeners.
 
-- **10-second main tick** → emits `"resolution"` (action processing) then `"broadcast"`
-- **500ms sub-ticks** → 20 buckets (0–19), emits `"subtick"` each interval
-- Actions enqueue into the current bucket via `heartbeat.enqueue()`. On main tick, all buckets drain and `processMovementActions()` runs.
-- Register a tick processor: `heartbeat.setTickProcessor(fn)`
+- **500ms sub-tick** → emits `"subtick"` each interval; `socket.ts` calls `processAllActions()` unless `tickInFlight` is set
+- **10-second main tick** → emits `"broadcast"` (deferred if a tick is still in-flight); triggers `ENGINE_TICK` broadcast + `purgeResolvedActions()`
+- **Cycle start** → emits `"cycle_start"` immediately after broadcast; `socket.ts` calls `processEntityIntents()` so predator AI queues intents for the coming cycle
+- Actions are submitted by pushing to `pendingIntents[]` in `socket.ts` (flushed to DB every 100ms) or via direct `createPendingAction()` calls from tRPC routers
 
 ### WebSocket
 
@@ -80,18 +80,18 @@ Tile definitions (label, color, isWater, isLilyPad) live in `shared/tileRegistry
 
 `client/src/components/Viewport.tsx` — HTML5 Canvas. Renders a 3×3 chunk neighborhood (48×48 tiles) in a 2:1 isometric projection.
 
-Forward transform (tile → screen):
+Forward transform (tile → screen) — TILE_W = 24, TILE_H = 12:
 ```
-screenX = floor((worldX - worldY) * 8) + 400
-screenY = floor((worldX + worldY) * 4) + 150
+screenX = floor((worldX - worldY) * (TILE_W / 2)) + 400   // × 12
+screenY = floor((worldX + worldY) * (TILE_H / 2)) + 150   // × 6
 ```
 
 Inverse (screen → tile, for click detection):
 ```
 u = clickX - 400;  v = clickY - 150
-worldX = round(u / 16 + v / 8)
-worldY = round(v / 8 - u / 16)
-// convert to absolute: gridX = worldX + centerChunkX * 16
+worldX = round(u / TILE_W + v / TILE_H)   // u/24 + v/12
+worldY = round(v / TILE_H - u / TILE_W)   // v/12 - u/24
+// convert to absolute: gridX = worldX + centerChunkX * CHUNK_SIZE
 ```
 
 `worldX/worldY` here are viewport-local (relative to center chunk origin). Convert to absolute grid: `gridX = worldX + centerChunkX * CHUNK_SIZE`.
@@ -100,20 +100,21 @@ worldY = round(v / 8 - u / 16)
 
 `shared/movement.ts` — pure functions: `chebyshevDistance()`, `getHopPath()`, `getLineTiles()`, plus sets `OPEN_WATER_TILES` and `SWIM_PASSABLE_TILES`.
 `server/engine/movement.ts` — `validateAndQueueMovement()` — validates range, writes a `pending_actions` row.
-`server/engine/tickProcessor.ts` — `processMovementActions()` — re-validates and applies positions on heartbeat resolution. Double-validation pattern is intentional.
+`server/engine/tickProcessor.ts` — `processAllActions()` — runs every 500ms subtick; re-validates and applies all pending actions (movement, combat, items, god/predator actions) via the Inhale/Living Ledger/Exhale pipeline. Double-validation pattern is intentional.
 
 ### Client Routing
 
 wouter `<Switch>` in `client/src/App.tsx`:
 - `/` → `Admin` (the active development UI — see below)
-- `/game` → `GamePage` (placeholder; not yet player-facing)
 - `/create-frog` → `FrogCreationForm`
+- `/map-studio` → `MapStudio` (developer screenshot tool)
+- `/testing-ground` → `TestingGround` (dev scratch page)
 
 ### Primary Development Target: Admin Panel
 
 **All active UI development happens in the Admin panel** (`client/src/pages/Admin.tsx` and its sub-components in `client/src/components/admin/`). It is the functional prototype for the eventual player-facing UI — not a throwaway dev tool. Features built here will be ported to the player UI once validated, so treat it with production-level care: good UX, correct state, no placeholders.
 
-The Admin panel has tabbed sections for Users, Frogs, Gods, World (isometric map), Items, World Log, and Engine pulse. When adding game features, wire them into the Admin panel first. `GamePage` (`/game`) is a secondary scratch area and is not the current focus.
+The Admin panel has tabbed sections for Users, Frogs, Gods, World (isometric map), Items, World Log, and Engine pulse. When adding game features, wire them into the Admin panel first.
 
 ### Shared Code
 
@@ -142,6 +143,8 @@ After implementing any new action, route, DB helper, or frontend component, read
 | `documentation/SWING_WEAPON_SCHEMA.md` | Item `statsJson` JSONB shape for equipment | Changes to `ItemStats`, `ActionSchemaSchema`, or the equip/bonus recalc pipeline |
 | `DIVINE_ASCII_ARCHITECTURE.md` | Canvas rendering data path, WebSocket message types, vision query | Changes to Viewport passes, vision query shape, WS message set, or SpriteManager |
 | `PROCEDURAL_GENERATION.md` | Terrain generation pipeline, tile types | Changes to tile chars, `worldGenerator.ts`, or chunk seeding |
+| `documentation/POI_SYSTEM.md` | POI table, status model, bake pipeline, heartbeat pass | Changes to the POI table, the POI pass, movement-wake, or POI bake integration |
+| `documentation/POI_DICTIONARY.md` | POI type catalog + authoring guide | New or changed POI type in `POI_TYPE_REGISTRY`, or changes to `PoiTypeDef` |
 
 **Checklist for each new frog action specifically:**
 - [ ] `ACTIONS_DICTIONARY.md` — add handler table entry (file, type, distance, key rules, fumble triggers)

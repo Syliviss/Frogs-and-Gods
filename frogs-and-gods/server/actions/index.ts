@@ -30,6 +30,7 @@ import { croakHandler } from "./croak";
 import { slitherHandler } from "./slither";
 import { strikeHandler } from "./strike";
 import { wrapHandler } from "./wrap";
+import { crushHandler } from "./crush";
 import type { GodActionHandler } from "./god_types";
 import type { PredatorActionHandler } from "./_predator_types";
 export { GOD_ACTION_TYPES } from "./_god_action_types";
@@ -76,6 +77,7 @@ export const PREDATOR_ACTION_REGISTRY: Record<string, PredatorActionHandler> = {
   SLITHER: slitherHandler,
   STRIKE:  strikeHandler,
   WRAP:    wrapHandler,
+  CRUSH:   crushHandler,
 };
 
 export { ACTION_REGISTRY };

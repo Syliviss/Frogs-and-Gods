@@ -4,6 +4,7 @@ import {
   getFrogsByInstanceId,
   createPendingAction,
   updatePredator,
+  updateItem,
   deletePredator,
   getChunksByCoords,
 } from "../db";
@@ -176,6 +177,17 @@ export async function calculateSnakeIntent(predator: Predator): Promise<void> {
   const currentHeartbeatForStarve = Math.floor(Date.now() / 10_000);
   const isStarved = currentHeartbeatForStarve - predator.lastMealTick > 378;
   if (isStarved && !stats.wrapping) {
+    // Drop carried loot at the head tile before despawning. This path runs in the
+    // non-batched entity-intent phase, so the writes are direct (no Exhale queue).
+    for (const itemId of predator.lootItems ?? []) {
+      await updateItem(itemId, {
+        itemState:  "GROUND",
+        gridX:      predator.gridX,
+        gridY:      predator.gridY,
+        ownerId:    null,
+        instanceId: predator.instanceId ?? null,
+      });
+    }
     await deletePredator(predator.id);
     return;
   }

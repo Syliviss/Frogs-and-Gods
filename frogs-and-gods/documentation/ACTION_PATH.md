@@ -24,9 +24,9 @@ Both paths converge at `createPendingAction()` in `server/db.ts`. After insertio
 **File:** `server/routers/admin.ts`
 
 #### `admin.submitActionForFrog` — frog item actions
-Used by `InventoryTab.tsx` for EQUIP, UNEQUIP, GIVE. Also used by `GamePage.tsx` for PICKUP.
+Used by `InventoryTab.tsx` for EQUIP, UNEQUIP, GIVE. PICKUP is submitted via the ActionBar in the Vision tab.
 ```
-InventoryTab.tsx / GamePage.tsx
+InventoryTab.tsx
   └─ trpc.admin.submitActionForFrog.mutate({ frogId, actionType, payload })
        └─ createPendingAction({ actorId: frogId, actionType, resolveBucket, payload })
        └─ returns { queued: true, pendingActionId }
@@ -394,11 +394,13 @@ Each handler's `broadcast()` phase calls `notify(userId, data)`:
 { type: "SWING_RESOLVED",     targetTiles, damaged }
 { type: "OPEN_DOOR",          mode }          ← "enter" or "exit"; frog owner notified on lair traversal
 { type: "CREATE_FROG_FAILED", reason: string } ← sent to userId on pipeline failure; HatchingScreen listens for this
+{ type: "SNAKE_STRIKE",       damage, newHp, killed }  ← sent to target frog owner
+{ type: "GOLEM_CRUSH",        damage, newHp, killed }  ← sent to each hit frog owner
 ```
 Delivered immediately when the action resolves, before the next ENGINE_TICK.
 
 ### Polling — ENGINE_TICK (10s cycle)
-`InventoryTab.tsx` and `GamePage.tsx` listen for ENGINE_TICK via WebSocket:
+`InventoryTab.tsx` and the Vision tab listen for ENGINE_TICK via `useTickSync`:
 ```typescript
 // on ENGINE_TICK:
 inventory.refetch()

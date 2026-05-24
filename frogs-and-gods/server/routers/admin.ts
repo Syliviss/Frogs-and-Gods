@@ -27,6 +27,7 @@ import {
   listAllFrogs,
   listAllGods,
   listAllUsers,
+  listPointsOfInterest,
   listRecentItems,
   listRecentPredators,
   listWorldMapChunks,
@@ -36,7 +37,7 @@ import {
   updateFrog,
   updateGod,
 } from "../db";
-import { POI_REGISTRY } from "../worldgen/index";
+import { getPoiTypeDef } from "../poi/registry";
 import { xpToNextLevel } from "../engine/xpDistributor";
 import {
   ActionSchemaSchema,
@@ -352,15 +353,19 @@ export const adminRouter = router({
     return getAllChunkBiomes();
   }),
 
-  getPoiRegistry: publicProcedure.query(() => {
-    return POI_REGISTRY.map((poi) => ({
-      id:        poi.id,
-      name:      poi.name,
-      type:      poi.type,
-      anchorX:   poi.anchorX,
-      anchorY:   poi.anchorY,
-      tileCount: poi.tiles?.length ?? 0,
-    }));
+  getPoiRegistry: publicProcedure.query(async () => {
+    const pois = await listPointsOfInterest();
+    return pois.map((poi) => {
+      const def = getPoiTypeDef(poi.poiType);
+      return {
+        id:        poi.id,
+        name:      def?.name ?? poi.poiType,
+        type:      poi.poiType,
+        anchorX:   poi.gridX,
+        anchorY:   poi.gridY,
+        tileCount: def?.layout.length ?? 0,
+      };
+    });
   }),
 
   getChunksByCoords: publicProcedure

@@ -17,9 +17,10 @@ Code that is fully typed and schema-defined but has no behavioral implementation
 
 ### `DOCILE` and `REACTIVE` (aiTypeEnum)
 
-- **Defined in:** `drizzle/schema.ts` (`aiTypeEnum: ["HUNTER", "REACTIVE", "DOCILE"]`), `shared/game.schema.ts`
-- **Missing:** Any behavioral branching on `aiType` in `server/entities/snake.ts` or `server/entities/index.ts`
-- **Current behavior:** A snake spawned as DOCILE or REACTIVE behaves identically to a HUNTER — `calculateSnakeIntent()` does not check `aiType`. All snakes hunt.
+- **Defined in:** `drizzle/schema.ts` (`aiTypeEnum: ["HUNTER", "REACTIVE", "DOCILE"]`)
+- **Missing:** Any behavioral branching on `aiType` in `server/entities/snake.ts`, `server/entities/golem.ts`, or `server/entities/index.ts`
+- **Current behavior:** A predator's `aiType` value is never read by AI code. Every snake/golem hunts. The DB column is required (non-null enum), but the value is hardcoded to `"HUNTER"` at the only remaining insertion site — `buildPredatorRow()` in `server/poi/processor.ts`.
+- **Cleanup done:** `aiType` has been stripped from `PredatorSpawnSpec` (the POI authoring API) — no more pretending the field is a knob. When REACTIVE/DOCILE behavior is implemented, reintroduce it on the spec and remove the hardcode.
 
 ---
 
@@ -138,16 +139,9 @@ Located in `server/_core/trpc.ts`. Both are defined as separate procedures but a
 
 Any code that checks `ctx.user` should be treated as always unauthenticated.
 
-### `client/src/pages/GamePage.tsx`
-
-The player-facing game view. Fully functional in isolation — renders the isometric Viewport, ActionBar, and action log. Wired to the `useItemIntentBuilder` SWING targeting hook. **Not yet player-facing** for these reasons:
-- Route `/game` exists in `App.tsx` but there is no auth gate
-- No session management (which frog is "yours"?)
-- No public routing (players cannot find it without knowing the URL)
-
 ### `client/src/pages/TestingGround.tsx`
 
-A dev scratch page. Not linked in any navigation. Not a route in `App.tsx`. Used for isolated component testing during development.
+A dev scratch page. Routed at `/testing-ground` in `App.tsx` and linked from the admin panel's "USER EXPERIENCE TESTING" dropdown. No persistent game features live here — used for isolated component testing during development.
 
 ### `server/_core/` Stubs
 

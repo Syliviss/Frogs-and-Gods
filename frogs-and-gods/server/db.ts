@@ -11,6 +11,7 @@ import {
   items,
   lairEntrances,
   pendingActions,
+  pointsOfInterest,
   predators,
   users,
   worldLogEvents,
@@ -24,6 +25,7 @@ import {
   type InsertItem,
   type InsertLairEntrance,
   type InsertPendingAction,
+  type InsertPointOfInterest,
   type InsertPredator,
   type InsertUser,
   type InsertWorldLogEvent,
@@ -33,6 +35,7 @@ import {
   type Item,
   type LairEntrance,
   type PendingAction,
+  type PointOfInterest,
   type Predator,
   type WorldMapChunk,
   type WorldMapOverride,
@@ -439,6 +442,17 @@ export async function getGroundItemsNear(gridX: number, gridY: number, range: nu
   ));
 }
 
+/** Unclaimed catalog items eligible to spawn on a hunting snake. */
+export async function getSnakeLootCandidateIds(): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ itemId: items.itemId })
+    .from(items)
+    .where(and(eq(items.lootType, "SNAKE_LOOT"), eq(items.itemState, "VOID")));
+  return rows.map((r) => r.itemId);
+}
+
 export async function getItemById(itemId: string): Promise<Item | null> {
   const db = await getDb();
   if (!db) return null;
@@ -713,6 +727,59 @@ export async function getPendingPredatorActions(currentBucket: number): Promise<
       lte(pendingActions.resolveBucket, currentBucket),
       inArray(pendingActions.actionType, [...PREDATOR_ACTION_TYPES]),
     ));
+}
+
+// ─────────────────────────────────────────────
+// POINTS OF INTEREST
+// ─────────────────────────────────────────────
+
+/** Bulk-insert POIs detected during the world bake. Idempotent: a POI already present
+ *  at a tile is left untouched, so re-baking never clobbers live runtime state. */
+export async function batchCreatePois(pois: InsertPointOfInterest[]): Promise<void> {
+  if (pois.length === 0) return;
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.insert(pointsOfInterest).values(pois).onConflictDoNothing({
+    target: [pointsOfInterest.gridX, pointsOfInterest.gridY],
+  });
+}
+
+export async function getPoisInChunkArea(
+  coords: { chunkX: number; chunkY: number }[],
+): Promise<PointOfInterest[]> {
+  const db = await getDb();
+  if (!db || coords.length === 0) return [];
+  const conditions = coords.map((c) =>
+    and(eq(pointsOfInterest.chunkX, c.chunkX), eq(pointsOfInterest.chunkY, c.chunkY))
+  );
+  return db.select().from(pointsOfInterest).where(
+    and(isNull(pointsOfInterest.instanceId), or(...conditions))
+  );
+}
+
+/** POIs the heartbeat pass must process this tick: active (-1), woken (0), cleanup (2). */
+export async function getActivePois(): Promise<PointOfInterest[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(pointsOfInterest).where(and(
+    isNull(pointsOfInterest.instanceId),
+    inArray(pointsOfInterest.status, [-1, 0, 2]),
+  ));
+}
+
+/** Bulk countdown step for grace-period POIs (status >= 3). One cheap UPDATE per heartbeat. */
+export async function decrementDormantPois(): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(pointsOfInterest)
+    .set({ status: sql`${pointsOfInterest.status} - 1` })
+    .where(gte(pointsOfInterest.status, 3));
+}
+
+export async function listPointsOfInterest(limit = 500): Promise<PointOfInterest[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(pointsOfInterest).orderBy(pointsOfInterest.id).limit(limit);
 }
 
 // ─────────────────────────────────────────────

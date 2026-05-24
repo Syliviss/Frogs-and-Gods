@@ -1,9 +1,10 @@
-import type { Frog, PredatorStats } from "../../drizzle/schema";
+import type { Frog, Predator, PredatorStats } from "../../drizzle/schema";
 import type { TileChar } from "../../shared/game.schema";
 import type { SimulatedState, UpdateInstruction } from "../engine/types";
 import { CHUNK_SIZE } from "../utils/worldGenerator";
 import type { ValidationResult } from "./_types";
 import { pushActionLog } from "../engine/actionLog";
+import { chebyshevDistance } from "../../shared/movement";
 
 // ─────────────────────────────────────────────
 // SPATIAL UTILITIES
@@ -65,12 +66,34 @@ export function applyDamage(
     if (!predator || predator.currentHp <= 0) return;
     const newHp = Math.max(0, predator.currentHp - amount);
     if (newHp === 0) {
+      dropPredatorLoot(predator, queue);
       state.predators.delete(id);
       queue.push({ type: "PREDATOR_DELETE", id });
     } else {
       state.updatePredator(id, { currentHp: newHp });
       queue.push({ type: "PREDATOR_UPDATE", id, changes: { currentHp: newHp } });
     }
+  }
+}
+
+/**
+ * Drops every item a predator carries onto the world tile under its head.
+ * Call from any death path before the predator row is removed. Pushes
+ * ITEM_UPDATEs onto `out` so the drop is written in the next Exhale.
+ */
+export function dropPredatorLoot(predator: Predator, out: UpdateInstruction[]): void {
+  for (const itemId of predator.lootItems ?? []) {
+    out.push({
+      type: "ITEM_UPDATE",
+      id: itemId,
+      changes: {
+        itemState:  "GROUND",
+        gridX:      predator.gridX,
+        gridY:      predator.gridY,
+        ownerId:    null,
+        instanceId: predator.instanceId ?? null,
+      },
+    });
   }
 }
 
@@ -137,6 +160,33 @@ export function rollConditionCheck(
   // ── Add future conditions here ──
 
   return { ok: true };
+}
+
+// ─────────────────────────────────────────────
+// GOLEM UTILITIES
+// ─────────────────────────────────────────────
+
+/**
+ * Chebyshev distance from the nearest tile of a 3×3 golem (centered at cx,cy)
+ * to any target point (fx,fy). Equivalent to max(0, chebyshev(center,target)-1)
+ * but computed exactly via coordinate clamping.
+ */
+export function distanceToGolem(cx: number, cy: number, fx: number, fy: number): number {
+  const nearestX = Math.max(cx - 1, Math.min(cx + 1, fx));
+  const nearestY = Math.max(cy - 1, Math.min(cy + 1, fy));
+  return chebyshevDistance(nearestX, nearestY, fx, fy);
+}
+
+/**
+ * Returns true if (x, y) falls on any tile of any GOLEM predator in the state.
+ * Used by frog movement to block entry into golem tiles.
+ */
+export function isGolemTile(state: SimulatedState, x: number, y: number): boolean {
+  for (const predator of Array.from(state.predators.values())) {
+    if (predator.enemyType !== "GOLEM") continue;
+    if (Math.abs(x - predator.gridX) <= 1 && Math.abs(y - predator.gridY) <= 1) return true;
+  }
+  return false;
 }
 
 // ─────────────────────────────────────────────

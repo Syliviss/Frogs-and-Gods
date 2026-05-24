@@ -18,10 +18,11 @@ import {
 // ─────────────────────────────────────────────
 
 export const roleEnum         = pgEnum("role",           ["frog", "god", "admin"]);
-export const itemStateEnum    = pgEnum("item_state",     ["VOID", "GROUND", "INVENTORY", "EQUIPPED", "ITEM", "GOD"]);
+export const itemStateEnum    = pgEnum("item_state",     ["VOID", "GROUND", "INVENTORY", "EQUIPPED", "ITEM", "GOD", "PREDATOR"]);
 export const itemTypeEnum     = pgEnum("item_type",      ["STANDARD", "CONTAINER"]);
+export const lootTypeEnum     = pgEnum("loot_type",      ["NONE", "SNAKE_LOOT", "GOLEM_LOOT"]);
 export const actionStatusEnum = pgEnum("action_status",  ["pending", "resolved", "cancelled"]);
-export const enemyTypeEnum    = pgEnum("enemy_type",     ["SNAKE", "FLY"]);
+export const enemyTypeEnum    = pgEnum("enemy_type",     ["SNAKE", "FLY", "GOLEM"]);
 export const aiTypeEnum       = pgEnum("ai_type",        ["HUNTER", "REACTIVE", "DOCILE"]);
 
 // ─────────────────────────────────────────────
@@ -225,6 +226,8 @@ export const items = pgTable("items", {
   itemState:         itemStateEnum("item_state").default("GROUND").notNull(),
   /** STANDARD = plain item; CONTAINER = can hold other items (not other containers) */
   itemType:          itemTypeEnum("item_type").default("STANDARD").notNull(),
+  /** Loot pool tag — SNAKE_LOOT items are eligible to spawn on hunting snakes */
+  lootType:          lootTypeEnum("loot_type").default("NONE").notNull(),
   ownerId:           integer("owner_id"),
   /** Absolute tile X — set when itemState = "GROUND" */
   gridX:             integer("grid_x"),
@@ -358,6 +361,8 @@ export const predators = pgTable("predators", {
   lastMealTick: integer("last_meal_tick").default(0).notNull(),
   /** Flexible AI state, mutations, path data */
   statsJson:    jsonb("stats_json").$type<PredatorStats>(),
+  /** UUIDs of items this predator carries — dropped at the head tile on death */
+  lootItems:    jsonb("loot_items").$type<string[]>().default([]).notNull(),
   /** Null = overworld; N = inside instance with that id */
   instanceId:   integer("instance_id"),
   createdAt:    timestamp("createdAt").defaultNow().notNull(),
@@ -369,6 +374,41 @@ export const predators = pgTable("predators", {
 
 export type Predator       = typeof predators.$inferSelect;
 export type InsertPredator = typeof predators.$inferInsert;
+
+// ─────────────────────────────────────────────
+// POINTS OF INTEREST  (procedural stateful encounter locations)
+// ─────────────────────────────────────────────
+
+export const pointsOfInterest = pgTable("points_of_interest", {
+  id:                 serial("id").primaryKey(),
+  /** Library type key — matches a PoiTypeDef in server/poi/registry.ts */
+  poiType:            varchar("poi_type", { length: 64 }).notNull(),
+  /** Absolute anchor tile X */
+  gridX:              integer("grid_x").notNull(),
+  /** Absolute anchor tile Y */
+  gridY:              integer("grid_y").notNull(),
+  /** Denormalized Math.floor(grid / 16) for fast spatial queries */
+  chunkX:             integer("chunk_x").notNull(),
+  chunkY:             integer("chunk_y").notNull(),
+  /** Lifecycle countdown. -1 = active, 0 = woken, 1 = dormant, 2 = cleanup, >=3 = grace countdown.
+   *  The POI heartbeat pass pulls status IN (-1,0,2); status >=3 is bulk-decremented only. */
+  status:             integer("status").default(1).notNull(),
+  /** True once the startup function has run; reset to false on cleanup */
+  triggered:          boolean("triggered").default(false).notNull(),
+  /** Predator ids spawned by this POI's startup — cleanup deletes exactly these */
+  spawnedPredatorIds: jsonb("spawned_predator_ids").$type<number[]>().default([]).notNull(),
+  /** Null = overworld; N = inside instance with that id */
+  instanceId:         integer("instance_id"),
+  createdAt:          timestamp("createdAt").defaultNow().notNull(),
+  updatedAt:          timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+}, (table) => [
+  uniqueIndex("unique_poi_pos").on(table.gridX, table.gridY),
+  index("idx_poi_chunk").on(table.chunkX, table.chunkY),
+  index("idx_poi_status").on(table.status),
+]);
+
+export type PointOfInterest       = typeof pointsOfInterest.$inferSelect;
+export type InsertPointOfInterest = typeof pointsOfInterest.$inferInsert;
 
 // ─────────────────────────────────────────────
 // WORLD LOG EVENTS  (broadcast to Gods)

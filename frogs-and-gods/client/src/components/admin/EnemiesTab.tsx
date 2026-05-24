@@ -14,13 +14,26 @@ const AI_COLORS: Record<string, string> = {
 
 const ENEMY_GLYPHS: Record<string, string> = {
   SNAKE: "S",
+  GOLEM: "G",
   FLY:   "F",
+};
+
+const ENEMY_GLYPH_COLORS: Record<string, string> = {
+  SNAKE: "#f87171",
+  GOLEM: "#808080",
+  FLY:   "#f87171",
+};
+
+const ENEMY_DEFAULTS: Record<string, { speed: string; hp: string }> = {
+  SNAKE: { speed: "5",  hp: "20" },
+  GOLEM: { speed: "3",  hp: "30" },
+  FLY:   { speed: "5",  hp: "20" },
 };
 
 export function EnemiesTab() {
   const [gridX, setGridX]         = useState("0");
   const [gridY, setGridY]         = useState("0");
-  const [enemyType, setEnemyType] = useState<"SNAKE" | "FLY">("SNAKE");
+  const [enemyType, setEnemyType] = useState<"SNAKE" | "GOLEM" | "FLY">("SNAKE");
   const [aiType, setAiType]       = useState<"HUNTER" | "REACTIVE" | "DOCILE">("HUNTER");
   const [speed, setSpeed]         = useState("5");
   const [hp, setHp]               = useState("20");
@@ -100,10 +113,16 @@ export function EnemiesTab() {
             <Label className="text-xs text-zinc-400">Enemy Type</Label>
             <select
               value={enemyType}
-              onChange={(e) => setEnemyType(e.target.value as "SNAKE" | "FLY")}
+              onChange={(e) => {
+                const t = e.target.value as "SNAKE" | "GOLEM" | "FLY";
+                setEnemyType(t);
+                const defaults = ENEMY_DEFAULTS[t];
+                if (defaults) { setSpeed(defaults.speed); setHp(defaults.hp); }
+              }}
               className="w-full h-8 rounded bg-zinc-800 border border-zinc-600 text-white text-sm px-2"
             >
               <option value="SNAKE">SNAKE</option>
+              <option value="GOLEM">GOLEM</option>
               <option value="FLY">FLY</option>
             </select>
           </div>
@@ -204,7 +223,7 @@ export function EnemiesTab() {
                 return (
                   <tr key={enemy.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
                     <td className="py-1 pr-2 text-zinc-500">{enemy.id}</td>
-                    <td className="py-1 pr-2 text-red-400 font-bold">
+                    <td className="py-1 pr-2 font-bold" style={{ color: ENEMY_GLYPH_COLORS[enemy.enemyType] ?? "#f87171" }}>
                       {ENEMY_GLYPHS[enemy.enemyType] ?? "?"}
                     </td>
                     <td className="py-1 pr-2 text-red-300">{enemy.enemyType}</td>

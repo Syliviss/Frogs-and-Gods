@@ -3,13 +3,14 @@ import type { ActionContext, ValidationResult, ExecuteResult, NotifyFn, ActionHa
 import type { SimulatedState, UpdateInstruction } from "../engine/types";
 import type { FrogStats } from "../../drizzle/schema";
 import { CHUNK_SIZE } from "../utils/worldGenerator";
+import { getSnakeLootCandidateIds } from "../db";
 
 export const croakHandler: ActionHandler = {
   validate(_ctx: ActionContext, _state: SimulatedState): ValidationResult {
     return { ok: true };
   },
 
-  execute(ctx: ActionContext, state: SimulatedState, out: UpdateInstruction[]): ExecuteResult {
+  async execute(ctx: ActionContext, state: SimulatedState, out: UpdateInstruction[]): Promise<ExecuteResult> {
     const frog = ctx.frog!;
     const maxBreath = (frog.statsJson as FrogStats).maxBreath ?? 5;
     state.updateFrog(ctx.frogId, { currentBreath: maxBreath });
@@ -37,7 +38,7 @@ export const croakHandler: ActionHandler = {
             for (let lx = 0; lx < row.length; lx++) {
               const char = row[lx];
               totalTiles++;
-              if (char === "#") {
+              if (char === "#" || char === "o" || char === "T") {
                 landTiles.push({ gridX: cx * CHUNK_SIZE + lx, gridY: cy * CHUNK_SIZE + ly });
                 landAndPeakCount++;
               } else if (char === "^") {
@@ -54,6 +55,22 @@ export const croakHandler: ActionHandler = {
 
         if (Math.random() < spawnChance) {
           const tile = landTiles[Math.floor(Math.random() * landTiles.length)]!;
+
+          // 10% chance the snake spawns carrying an item from the SNAKE_LOOT pool
+          let lootItems: string[] = [];
+          if (Math.random() < 0.10) {
+            const candidates = await getSnakeLootCandidateIds();
+            if (candidates.length > 0) {
+              const pickedId = candidates[Math.floor(Math.random() * candidates.length)]!;
+              lootItems = [pickedId];
+              out.push({
+                type: "ITEM_UPDATE",
+                id: pickedId,
+                changes: { itemState: "PREDATOR", gridX: null, gridY: null, ownerId: null },
+              });
+            }
+          }
+
           out.push({
             type: "PREDATOR_INSERT",
             data: {
@@ -65,6 +82,7 @@ export const croakHandler: ActionHandler = {
               chunkY: Math.floor(tile.gridY / CHUNK_SIZE),
               currentHp: 10,
               lastMealTick: Math.floor(Date.now() / 10_000),
+              lootItems,
               statsJson: {
                 speed: 5,
                 segments: [

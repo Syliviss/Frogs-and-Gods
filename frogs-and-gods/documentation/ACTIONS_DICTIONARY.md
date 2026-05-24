@@ -185,6 +185,8 @@ applyDamage(state, out, "FROG",     frogId,     dmg); // variable damage
 
 Three separate `ActionHandler` exports: `stepHandler`, `hopHandler`, `swimHandler`. Each is imported directly by `step.ts`, `hop.ts`, and `swim.ts`. All three use `rollConditionCheck`, `checkItemFumble`, and `getTerrainAt` from `_utils.ts`.
 
+**POI wake side-effect:** after a frog moves, each handler's `execute()` calls `wakePoisNear()` — it emits a `POI_UPDATE { status: 0 }` for every overworld Point of Interest in the frog's new 3×3 chunk neighborhood, so the next POI heartbeat pass evaluates them. See `documentation/POI_SYSTEM.md`.
+
 ---
 
 ## Frog Actions (ACTION_REGISTRY)
@@ -273,9 +275,9 @@ Three separate `ActionHandler` exports: `stepHandler`, `hopHandler`, `swimHandle
 | **File** | `server/actions/croak.ts` |
 | **Type** | frog (universal) |
 | **Distance** | Self — no tile target required |
-| **Key rules** | Always succeeds. Resets `currentBreath` to `maxBreath` (from `statsJson`). Falls back to 5 if `maxBreath` is absent (legacy rows). Universal — no equipment required. |
+| **Key rules** | Always succeeds. Resets `currentBreath` to `maxBreath` (from `statsJson`). Falls back to 5 if `maxBreath` is absent (legacy rows). Universal — no equipment required. **Snake attraction (overworld only):** scans the 3×3 chunk area; with chance 20% (dense land ≥45%) or 3% (sparse) spawns a HUNTER snake on a random land tile. A spawned snake has a **10% chance** to carry one loot item drawn at random from the `SNAKE_LOOT` pool (`items` with `lootType = 'SNAKE_LOOT'` AND `itemState = 'VOID'`); the item is recorded in `predators.lootItems` and flipped to `itemState = 'PREDATOR'`. |
 | **Fumble triggers** | None. |
-| **State written** | `FROG_UPDATE { currentBreath }` |
+| **State written** | `FROG_UPDATE { currentBreath }`; optionally `PREDATOR_INSERT` (snake) and `ITEM_UPDATE { itemState: PREDATOR }` (claimed loot). |
 | **UI** | "CROAK" button in ActionBar universal row (teal border). |
 
 ### OPEN_DOOR
@@ -336,6 +338,21 @@ Three separate `ActionHandler` exports: `stepHandler`, `hopHandler`, `swimHandle
 | **Actor** | Snake |
 | **Key rules** | On success: snake body **teleports** to 3 connected `#` tiles adjacent to the target frog — head placed on the nearest **cardinal** neighbor (N/S/E/W) to the snake's original position, then 2 more clockwise `[cardinal → diagonal → cardinal]`, forming a guaranteed L-shape around the frog. Sets `predator.statsJson.wrapping = { targetFrogId }` and `frog.statsJson.wrappedBy = predatorId` canonically. Both fields must be cleared together. A wrapped frog that attempts any action triggers `rollConditionCheck()` — **escape roll: `Math.max(frog.str, frog.dex) >= 15`**. Failed escape = FUMBLE (turn consumed, frog still wrapped). A frog with both STR < 15 and DEX < 15 cannot escape without stat growth or divine intervention. |
 
+### CRUSH
+
+| | |
+|--|--|
+| **File** | `server/actions/crush.ts` |
+| **Type** | combat |
+| **Actor** | Golem |
+| **Range** | Chebyshev ≤ **2** from the nearest golem tile to target (i.e., Chebyshev ≤ 3 from golem center) |
+| **Damage** | 15 flat to **all frogs in the crush zone** |
+| **Crush zone** | Lines from the 3 nearest golem tiles to the target tile (via `getLineTiles`), deduplicated. All unique frogs on any zone tile take 15 damage. |
+| **Key rules** | Double-validation: if no frog is on the primary target tile at resolution → FUMBLE (turn consumed). On kill of primary target: golem's `lastMealTick` is updated and the golem repositions — the nearest golem tile slides to the dead frog's tile, shifting the whole 3×3 grid by the same offset. If primary target survives, golem stays put. No follow-up action queued. |
+| **Fumble triggers** | Primary target frog absent from tile at resolution time. |
+| **Action log** | One `"Golem CRUSHES {name} for 15 dmg"` entry per hit frog. On kill + reposition: additional `"The golem advances onto the remains of {name}."` entry at new golem position. |
+| **WS notify** | `{ type: "GOLEM_CRUSH", damage: 15, newHp, killed }` — sent to each hit frog's owner. |
+
 ---
 
 ## God Actions (GOD_ACTION_REGISTRY, actorId = 0)
@@ -385,7 +402,7 @@ God actions have no frog actor. They run in Pass 1 (before all other actions) an
 | | |
 |--|--|
 | **File** | `server/actions/kill_predator.ts` |
-| **Key rules** | Hard-deletes the predator row by ID. Not a combat death — no XP, no loot, no death event. Used for divine removal from the admin panel. |
+| **Key rules** | Hard-deletes the predator row by ID. Not a combat death — no XP, no death event. Any items in `predators.lootItems` are dropped to `itemState = 'GROUND'` at the snake's head tile via `dropPredatorLoot()`. Used for divine removal from the admin panel. |
 
 ---
 

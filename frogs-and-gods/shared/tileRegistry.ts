@@ -18,6 +18,8 @@ export const TILE_REGISTRY: Record<TileChar, TileDef> = {
   "%": { char: "%", label: "Lily Pad",  color: "#4a7a20", isWater: false, isLilyPad: true  },
   "D": { char: "D", label: "Lair Door", color: "#9333ea", isWater: false, isLilyPad: false },
   "^": { char: "^", label: "Peak",      color: "#a0a0b0", isWater: false, isLilyPad: false },
+  "o": { char: "o", label: "Snake Den", color: "#ffffff", isWater: false, isLilyPad: false },
+  "T": { char: "T", label: "Golem Sanctuary", color: "#4488ff", isWater: false, isLilyPad: false },
 };
 
 export function getTileDef(char: string): TileDef | undefined {

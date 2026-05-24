@@ -43,7 +43,7 @@ export type GodIntervention = z.infer<typeof GodInterventionSchema>;
 // ENEMY / PREDATOR
 // ─────────────────────────────────────────────
 
-export const EnemyTypeSchema   = z.enum(["SNAKE", "FLY"]);
+export const EnemyTypeSchema   = z.enum(["SNAKE", "FLY", "GOLEM"]);
 export const AiTypeSchema      = z.enum(["HUNTER", "REACTIVE", "DOCILE"]);
 
 export const PredatorSchema = z.object({
@@ -158,7 +158,7 @@ export const SpawnChunkSchema = z.object({
 });
 export type SpawnChunkInput = z.infer<typeof SpawnChunkSchema>;
 
-export const TileCharSchema = z.enum(["≈", "+", "~", "@", "#", "%", "D", "^"]);
+export const TileCharSchema = z.enum(["≈", "+", "~", "@", "#", "%", "D", "^", "o", "T"]);
 export type TileChar = z.infer<typeof TileCharSchema>;
 
 export const WorldMapChunkSchema = z.object({
@@ -244,11 +244,14 @@ export const ItemStatsSchema = z.object({
 });
 export type ItemStats = z.infer<typeof ItemStatsSchema>;
 
-export const ItemStateSchema = z.enum(["VOID", "GROUND", "INVENTORY", "EQUIPPED", "ITEM", "GOD"]);
+export const ItemStateSchema = z.enum(["VOID", "GROUND", "INVENTORY", "EQUIPPED", "ITEM", "GOD", "PREDATOR"]);
 export type ItemState = z.infer<typeof ItemStateSchema>;
 
 export const ItemTypeSchema = z.enum(["STANDARD", "CONTAINER"]);
 export type ItemType = z.infer<typeof ItemTypeSchema>;
+
+export const LootTypeSchema = z.enum(["NONE", "SNAKE_LOOT", "GOLEM_LOOT"]);
+export type LootType = z.infer<typeof LootTypeSchema>;
 
 export const SpawnItemSchema = z.object({
   name:       z.string().min(1).max(128),
@@ -273,6 +276,7 @@ export const CreateItemPayloadSchema = z.object({
   statsJson:   ItemStatsSchema,
   pixelData:   z.array(z.string().nullable()).length(256).optional(),
   itemType:    ItemTypeSchema.default("STANDARD"),
+  lootType:    LootTypeSchema.default("NONE"),
   rarityTier:  z.number().int().min(1).max(12).default(1),
 });
 export type CreateItemPayload = z.infer<typeof CreateItemPayloadSchema>;

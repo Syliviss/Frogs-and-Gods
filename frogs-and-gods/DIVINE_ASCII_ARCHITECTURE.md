@@ -179,7 +179,7 @@ Each redraw runs four sequential passes over the same canvas context:
 
 Ground items are drawn *before* entities so frogs always appear visually on top of loot.
 
-**Pass 4 — Entities.** Draw frogs as 18×18 pixel sprites via `frogSpriteManager.get(frog.id)`, falling back to green (`#00ff88`) 9×9 `fillRect` squares when the sprite hasn't baked yet. Draw predators as red (`#ff4444`) ASCII `'S'` characters via `ctx.fillText("S", screenX, screenY)`. Frog sprites are lazily loaded from `frogs.model_json` (see §7 below); predators remain ASCII glyphs.
+**Pass 4 — Entities.** Draw frogs as 18×18 pixel sprites via `frogSpriteManager.get(frog.id)`, falling back to green (`#00ff88`) 9×9 `fillRect` squares when the sprite hasn't baked yet. Draw predators as ASCII glyphs branched on `entity.enemyType`: GOLEM renders dark gray (`#555555`) `'G'` characters; all other predators (SNAKE) render red (`#ff4444`) `'S'` characters. Golems are pre-expanded to 9 tiles (center ± 1) in the Admin.tsx `entities` memo before reaching the Viewport. Frog sprites are lazily loaded from `frogs.model_json` (see §7 below).
 
 **Pass 5 — Selection highlight.** If a tile is selected, draw a yellow (`#facc15`) 18×14 outline rectangle over it.
 

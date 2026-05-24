@@ -73,7 +73,8 @@ export const wrapHandler: PredatorActionHandler = {
     const coil: { x: number; y: number }[] = [];
     for (let off = 0; off < 8 && coil.length < 3; off++) {
       const t = neighbors[(startIdx + off) % 8]!;
-      if (getTerrainAt(state, t.x, t.y) === "#") coil.push(t);
+      const ch = getTerrainAt(state, t.x, t.y);
+      if (ch === "#" || ch === "o" || ch === "T") coil.push(t);
     }
     if (coil.length < 3) {
       coil.length = 0;

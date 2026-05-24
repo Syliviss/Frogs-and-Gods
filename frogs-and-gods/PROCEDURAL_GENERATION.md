@@ -14,7 +14,7 @@ Frogs & Gods uses a **narrow, deliberate procedural generation strategy**: the w
 | World terrain (biome + tile noise) | Yes | Seeded Perlin noise |
 | Biome assignment per chunk | Yes | Seeded Perlin noise (offset seed) |
 | Lily pad placement (`%`) | Yes | Deterministic hash per tile |
-| POI tile stamping | Yes (bake-time) | None — code-defined arrays |
+| POI placement & layout stamping | Yes (bake-time) | Seeded per-tile density roll |
 | Chunk seeding script | Yes (orchestration) | None — calls terrain gen |
 | Tile definitions | No | Static data |
 | God terrain overrides | No | Manual/player-authored |
@@ -58,11 +58,15 @@ Layer 3 ── TILE RESOLVER  [server/worldgen/tileResolver.ts]
   "%" lily pad scattered in deep water via deterministic hash (~2/chunk)
   │
   ▼
-Layer 4 ── POI STAMPER  [server/worldgen/poiRegistry.ts]
-  stampPois(cx, cy, grid) → overwrites specific tile positions
+{ grid: string[][] | null, biome: Biome }   ← generateChunk output (pure terrain)
   │
   ▼
-{ grid: string[][] | null, biome: Biome } → DB upsert
+POI DETECTION + STAMPING  [server/poi/worldgen.ts — runs in the bake, NOT generateChunk]
+  detectPois()      places POIs by biome/tile rule + seeded density roll
+  stampPoiLayouts() bakes each POI's layout footprint into chunk terrain
+  │
+  ▼
+DB upsert: world_map_chunks  +  points_of_interest rows
 ```
 
 ### Constants
@@ -172,24 +176,25 @@ Positions are chosen via Fisher-Yates shuffle (same seeded LCG), so placement is
 
 ---
 
-## 6. Layer 4 — POI Stamper
+## 6. POI Detection & Stamping
 
-**File:** [server/worldgen/poiRegistry.ts](server/worldgen/poiRegistry.ts)
+**Files:** [server/poi/worldgen.ts](server/poi/worldgen.ts), [server/poi/registry.ts](server/poi/registry.ts)
 
-POIs are TypeScript objects in source code — not DB rows. At seed time, `stampPois()` iterates `POI_REGISTRY` and overwrites specific tiles in the generated grid. After seeding, the chunk is fully self-contained; no POI query is needed at runtime.
+POIs are **procedurally placed and stored as DB rows** — they are no longer code-defined
+static arrays. `generateChunk()` produces pure terrain; POI work happens in the bake script.
 
-```ts
-export interface PoiDef {
-  id:      string;
-  name:    string;
-  type:    PoiType;   // "SHRINE" | "DUNGEON" | "RESOURCE_NODE" | "SPAWN_ZONE" | "LANDMARK"
-  anchorX: number;    // absolute world tile X
-  anchorY: number;    // absolute world tile Y
-  tiles?:  Array<{ dx: number; dy: number; char: string }>;
-}
-```
+- `detectPois(cx, cy, grid, biome, seed)` — scans a generated chunk; a tile becomes a POI
+  when its biome ∈ `eligibleBiomes`, its char ∈ `eligibleTiles`, and a deterministic seeded
+  roll lands under the type's `density`.
+- `stampPoiLayouts(cx, cy, grid, pois)` — bakes each POI type's `layout` footprint into
+  chunk terrain (handles layouts straddling chunk borders).
 
-Changing a POI requires a full reseed (accepted design policy).
+The bake runs detection over all chunks, then a second pass that stamps layouts and
+persists both `world_map_chunks` and `points_of_interest` rows. POIs are then **stateful at
+runtime** — see [documentation/POI_SYSTEM.md](documentation/POI_SYSTEM.md) and
+[documentation/POI_DICTIONARY.md](documentation/POI_DICTIONARY.md).
+
+Changing a POI type requires a re-bake (accepted design policy).
 
 ---
 
@@ -206,9 +211,12 @@ npx tsx scripts/seedWorld.ts --dry-run  # count only, no DB writes
 
 Key behaviors:
 - `MACRO_GRID` is computed once before the loop (module-level const).
-- Upserts in batches of 500 chunks — idempotent (safe to re-run).
+- **Three passes:** (1) detect POIs across all chunks, (2) regenerate chunks, stamp POI
+  layouts, upsert chunks, (3) insert `points_of_interest` rows.
+- Upserts chunks in batches of 500 — idempotent (safe to re-run). POI rows insert with
+  `onConflictDoNothing`, so re-baking never clobbers live POI runtime state.
 - Void chunks: `biome = "void"`, `terrainDataJson = null`.
-- Logs progress every 5,000 chunks.
+- Logs progress every 5,000 chunks and the total POI count.
 
 ---
 
@@ -226,6 +234,8 @@ export const TILE_REGISTRY: Record<TileChar, TileDef> = {
   "%": { char: "%", label: "Lily Pad",  color: "#4a7a20", isWater: false, isLilyPad: true  },  // active
   "D": { char: "D", label: "Lair Door", color: "#9333ea", isWater: false, isLilyPad: false },
   "^": { char: "^", label: "Peak",      color: "#a0a0b0", isWater: false, isLilyPad: false },
+  "o": { char: "o", label: "Snake Den",        color: "#ffffff", isWater: false, isLilyPad: false },  // POI marker
+  "T": { char: "T", label: "Golem Sanctuary",  color: "#4488ff", isWater: false, isLilyPad: false },  // POI marker
 };
 ```
 
@@ -260,7 +270,7 @@ The Admin "World" tab is a read-only inspector for the baked world:
 
 - **Biome coverage canvas** — 315×315 pixel canvas, 1px per chunk, color-coded by biome. Click a pixel to inspect that chunk.
 - **Chunk inspector** — renders the 16×16 ASCII grid of the clicked chunk with tile colors from TILE_REGISTRY.
-- **POI registry list** — auto-generated from `POI_REGISTRY` via `admin.getPoiRegistry` tRPC query.
+- **POI list** — real `points_of_interest` rows via the `admin.getPoiRegistry` tRPC query.
 
 Data sources: `admin.getAllChunkBiomes` (biome canvas), `admin.getChunksByCoords` (chunk inspector), `admin.getPoiRegistry` (POI list).
 
@@ -282,6 +292,7 @@ Movement validation reads the raw `terrainDataJson` from the DB — no changes n
 | [server/worldgen/biomeMap.ts](server/worldgen/biomeMap.ts) | Biome per chunk | `FastNoiseLite` Perlin (seed+9999) |
 | [server/worldgen/generator.ts](server/worldgen/generator.ts) | Tile noise per tile | `FastNoiseLite` Perlin (seed) |
 | [server/worldgen/tileResolver.ts](server/worldgen/tileResolver.ts) | Lily pad `%` scatter | Deterministic hash |
+| [server/poi/worldgen.ts](server/poi/worldgen.ts) | POI placement roll per tile | Deterministic hash (LCG step) |
 | [server/routers/admin.ts](server/routers/admin.ts) | Item UUID on spawn | `crypto.randomUUID()` |
 | [server/routers/admin.ts](server/routers/admin.ts) | Test user ID generation | `Math.random()` (dev-only) |
 
@@ -296,7 +307,9 @@ In [server/worldgen/macroLayer.ts](server/worldgen/macroLayer.ts): change `WOLFR
 In [server/worldgen/biomeMap.ts](server/worldgen/biomeMap.ts): edit `BIOME_REGISTRY` thresholds and `getBiomeForChunk` noise breakpoints. Reseed to apply.
 
 ### Add POIs
-In [server/worldgen/poiRegistry.ts](server/worldgen/poiRegistry.ts): add a `PoiDef` to `POI_REGISTRY` with `anchorX/Y` (absolute tile coords) and a `tiles[]` array of offsets. Reseed to bake in.
+In [server/poi/registry.ts](server/poi/registry.ts): add a `PoiTypeDef` to
+`POI_TYPE_REGISTRY` (placement rules, layout, `cleanupDelay`, `startup`). Re-bake to place
+them. Full authoring guide: [documentation/POI_DICTIONARY.md](documentation/POI_DICTIONARY.md).
 
 ### Add new tile types
 1. Add the char to `TileCharSchema` in [shared/game.schema.ts](shared/game.schema.ts)

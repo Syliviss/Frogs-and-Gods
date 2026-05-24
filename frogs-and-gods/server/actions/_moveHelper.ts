@@ -9,7 +9,7 @@ import {
 import type { TileChar } from "../../shared/game.schema";
 import { pushActionLog } from "../engine/actionLog";
 import type { ActionContext, ValidationResult, ExecuteResult, NotifyFn, ActionHandler } from "./_types";
-import { getTerrainAt, rollConditionCheck, checkItemFumble } from "./_utils";
+import { getTerrainAt, rollConditionCheck, checkItemFumble, isGolemTile } from "./_utils";
 import type { SimulatedState, UpdateInstruction } from "../engine/types";
 import { CHUNK_SIZE } from "../utils/worldGenerator";
 
@@ -31,6 +31,27 @@ function sharedPreamble(ctx: ActionContext, state: SimulatedState): ValidationRe
   return { ok: true };
 }
 
+// After a frog moves, wake every overworld POI in its new 3×3 chunk neighborhood
+// (status -> 0) so the next POI heartbeat pass evaluates it. Already-active POIs
+// (status -1 or 0) are left alone.
+function wakePoisNear(
+  state:      SimulatedState,
+  gridX:      number,
+  gridY:      number,
+  instanceId: number | null,
+  out:        UpdateInstruction[],
+): void {
+  if (instanceId != null) return;  // POIs are overworld-only
+  const cx = Math.floor(gridX / CHUNK_SIZE);
+  const cy = Math.floor(gridY / CHUNK_SIZE);
+  for (const poi of Array.from(state.pois.values())) {
+    if (poi.instanceId != null) continue;
+    if (poi.status === -1 || poi.status === 0) continue;
+    if (Math.abs(poi.chunkX - cx) > 1 || Math.abs(poi.chunkY - cy) > 1) continue;
+    out.push({ type: "POI_UPDATE", id: poi.id, changes: { status: 0 } });
+  }
+}
+
 // ─── STEP ────────────────────────────────────────────────────────────────────
 // Free. Moves 1 tile in any direction. Cannot land on ^.
 
@@ -48,6 +69,7 @@ export const stepHandler: ActionHandler = {
 
     const targetChar = getTerrainAt(state, tx, ty);
     if (targetChar === "^") return { ok: false, message: "Cannot step onto a Peak." };
+    if (isGolemTile(state, tx, ty)) return { ok: false, message: "A golem blocks the way." };
 
     return { ok: true };
   },
@@ -61,6 +83,7 @@ export const stepHandler: ActionHandler = {
 
     state.updateFrog(frog.id, { gridX: tx, gridY: ty });
     out.push({ type: "FROG_UPDATE", id: frog.id, changes: { gridX: tx, gridY: ty } });
+    wakePoisNear(state, tx, ty, frog.instanceId, out);
 
     return { success: true, data: { targetGridX: tx, targetGridY: ty } };
   },
@@ -98,7 +121,7 @@ export const hopHandler: ActionHandler = {
     if (dist > 3) return { ok: false, message: "HOP max range is 3 tiles." };
     if (dist === 0) return { ok: false, message: "Must hop to a different tile." };
 
-    // ^ anywhere along the path (including destination) → fumble
+    // ^ or golem anywhere along the path (including destination) → fumble
     const path = getHopPath(frog.gridX, frog.gridY, tx, ty);
     const pathChars = getTerrainPath(state, path);
     if (pathChars.some(c => c === "^")) {
@@ -106,6 +129,13 @@ export const hopHandler: ActionHandler = {
         ok:      false,
         code:    "FUMBLE",
         message: `${frog.name} tumbles into a peak!`,
+      };
+    }
+    if (path.some(({ x, y }) => isGolemTile(state, x, y))) {
+      return {
+        ok:      false,
+        code:    "FUMBLE",
+        message: `${frog.name} crashes into a golem!`,
       };
     }
 
@@ -132,6 +162,7 @@ export const hopHandler: ActionHandler = {
     const newBreath = (frog.currentBreath ?? 0) - dist;
     state.updateFrog(frog.id, { gridX: tx, gridY: ty, currentBreath: newBreath });
     out.push({ type: "FROG_UPDATE", id: frog.id, changes: { gridX: tx, gridY: ty, currentBreath: newBreath } });
+    wakePoisNear(state, tx, ty, frog.instanceId, out);
 
     return { success: true, data: { targetGridX: tx, targetGridY: ty } };
   },
@@ -196,6 +227,7 @@ export const swimHandler: ActionHandler = {
           if (char === "^") return { ok: false, message: "Cannot swim onto a Peak." };
           // Non-^ land tile is allowed as the exit tile.
         }
+        if (isGolemTile(state, x, y)) return { ok: false, message: "A golem blocks the shore." };
       }
     }
 
@@ -213,6 +245,7 @@ export const swimHandler: ActionHandler = {
     const newBreath = (frog.currentBreath ?? 0) - dist;
     state.updateFrog(frog.id, { gridX: tx, gridY: ty, currentBreath: newBreath });
     out.push({ type: "FROG_UPDATE", id: frog.id, changes: { gridX: tx, gridY: ty, currentBreath: newBreath } });
+    wakePoisNear(state, tx, ty, frog.instanceId, out);
 
     return { success: true, data: { targetGridX: tx, targetGridY: ty } };
   },

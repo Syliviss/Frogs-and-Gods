@@ -2,7 +2,6 @@ import FastNoiseLite from "fastnoise-lite";
 import type { Biome } from "../../shared/game.schema";
 import { BIOME_REGISTRY, getBiomeForChunk } from "./biomeMap";
 import { isChunkSolid } from "./macroLayer";
-import { stampPois } from "./poiRegistry";
 import { resolveTile, scatterLilyPads } from "./tileResolver";
 
 export const CHUNK_SIZE = 16;
@@ -49,8 +48,8 @@ export function generateChunk(
   // Layer 3.5: lily pad scatter (chunk-level, density-weighted)
   scatterLilyPads(grid, chunkX, chunkY, seed);
 
-  // Layer 4: POI stamper
-  stampPois(chunkX, chunkY, grid);
+  // POI layouts are detected and stamped by the world bake (see server/poi/worldgen.ts),
+  // not here — generateChunk produces pure terrain.
 
   return { grid, biome: biomeName };
 }

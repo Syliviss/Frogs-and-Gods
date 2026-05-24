@@ -209,13 +209,12 @@
 .action-log-container {
   width: 340px;
   max-height: 220px;
-  background: oklch(0.10 0.015 240 / 0.85);
-  border: 1px solid oklch(0.22 0.03 240);
+  background: #0a1120;
+  border: 1px solid #1e2a3a;
   border-radius: 0.375rem;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  backdrop-filter: blur(4px);
 }
 
 .action-log-header {
@@ -248,6 +247,68 @@
 .log-movement { color: oklch(0.75 0.06 130); }
 .log-combat   { color: oklch(0.68 0.20 25);  }
 .log-god      { color: oklch(0.75 0.12 200); }
+
+/* ── FROG STAT PANEL ── */
+.stat-panel {
+  background: #0a1120;
+  border: 1px solid #1e2a3a;
+  border-radius: 0.375rem;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.stat-label-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  color: oklch(0.55 0.025 200);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  width: 2.4rem;
+  flex-shrink: 0;
+}
+
+.stat-label-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  color: oklch(0.65 0.03 200);
+  width: 3rem;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.item-slot {
+  width: 32px;
+  height: 32px;
+  border: 1px dashed oklch(0.28 0.03 240);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.pixel-canvas {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.xp-section {
+  width: 80%;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.stat-xp-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.60rem;
+  color: oklch(0.72 0.18 140);
+  text-align: center;
+}
 
 /* ── GLOW EFFECTS ── */
 .glow-gold { box-shadow: 0 0 12px oklch(0.78 0.16 80 / 0.3), 0 0 24px oklch(0.78 0.16 80 / 0.1); }

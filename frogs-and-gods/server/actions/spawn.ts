@@ -30,6 +30,9 @@ export const spawnPredatorHandler: GodActionHandler = {
     const { gridX, gridY, enemyType, aiType, speed, hp } = SpawnPredatorPayloadSchema.parse(ctx.payload);
     const chunkX = Math.floor(gridX / 16);
     const chunkY = Math.floor(gridY / 16);
+    const statsJson = enemyType === "GOLEM"
+      ? { speed }
+      : { speed, segments: [{ x: gridX - 1, y: gridY }, { x: gridX - 2, y: gridY }] };
     const predator = {
       enemyType,
       aiType,
@@ -39,7 +42,7 @@ export const spawnPredatorHandler: GodActionHandler = {
       chunkY,
       currentHp: hp,
       lastMealTick: Math.floor(Date.now() / 10_000),
-      statsJson: { speed, segments: [{ x: gridX - 1, y: gridY }, { x: gridX - 2, y: gridY }] },
+      statsJson,
     };
     
     out.push({ type: "PREDATOR_INSERT", data: predator });

@@ -18,6 +18,7 @@ import type { TileChar, ActionLogEntry } from "../../../shared/game.schema";
 import { DIVINE_POWER_LIST } from "../../../shared/divinePowers";
 import { ActionBar } from "@/components/ActionBar";
 import { ActionLog } from "@/components/ActionLog";
+import { FrogStatPanel } from "@/components/FrogStatPanel";
 import { useTickSync } from "@/hooks/useTickSync";
 import { useActionLogs } from "@/hooks/useActionLogs";
 import { InventoryTab } from "@/components/admin/InventoryTab";
@@ -27,6 +28,7 @@ import { LairTab } from "@/components/admin/LairTab";
 import { ImageDropZone } from "@/components/admin/ImageDropZone";
 import { ItemStatsForm } from "@/components/admin/ItemStatsForm";
 import { spriteManager, SpriteManager } from "@/lib/SpriteManager";
+import { flattenPredators } from "@/lib/viewportUtils";
 const frogSpriteManager = new SpriteManager();
 import { useEquippedActionBar } from "@/hooks/useEquippedActionBar";
 
@@ -636,6 +638,7 @@ function ItemsTab() {
   const [createStatsStr, setCreateStatsStr] = useState("{}");
   const [createPixelStr, setCreatePixelStr] = useState("");
   const [createItemType, setCreateItemType] = useState<"STANDARD" | "CONTAINER">("STANDARD");
+  const [createLootType, setCreateLootType] = useState<"NONE" | "SNAKE_LOOT">("NONE");
   const [createError, setCreateError]       = useState<string | null>(null);
 
   const createItemMut = trpc.admin.createItem.useMutation({
@@ -664,7 +667,7 @@ function ItemsTab() {
       setCreateError(`Pixel data must be exactly 256 lines (got ${lines.length}).`);
       return;
     }
-    createItemMut.mutate({ name: createName, rarityTier: createTier, statsJson, pixelData: lines ?? undefined, itemType: createItemType });
+    createItemMut.mutate({ name: createName, rarityTier: createTier, statsJson, pixelData: lines ?? undefined, itemType: createItemType, lootType: createLootType });
   }
 
   return (
@@ -729,6 +732,17 @@ function ItemsTab() {
               >
                 <option value="STANDARD">STANDARD</option>
                 <option value="CONTAINER">CONTAINER</option>
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <p style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>Loot Type</p>
+              <select
+                value={createLootType}
+                onChange={(e) => setCreateLootType(e.target.value as "NONE" | "SNAKE_LOOT")}
+                style={{ width: "100%", background: "#060d18", border: "1px solid #1e2a3a", borderRadius: 4, padding: "6px 8px", color: "#e2e8f0", fontSize: 12, boxSizing: "border-box" }}
+              >
+                <option value="NONE">NONE</option>
+                <option value="SNAKE_LOOT">SNAKE_LOOT</option>
               </select>
             </div>
           </div>
@@ -1053,15 +1067,9 @@ function VisionTab() {
 
   const entities = useMemo(() => {
     if (!vision) return [];
-    const predatorTiles = vision.predators.flatMap((p) => {
-      const stats = p.statsJson as { segments?: { x: number; y: number }[] } | null;
-      const head = { gridX: p.gridX, gridY: p.gridY, type: "predator" as const };
-      const body = (stats?.segments ?? []).map((s) => ({ gridX: s.x, gridY: s.y, type: "predator" as const }));
-      return [head, ...body];
-    });
     return [
       ...vision.frogs.map((f) => ({ gridX: f.gridX, gridY: f.gridY, type: "frog" as const, id: f.id })),
-      ...predatorTiles,
+      ...flattenPredators(vision.predators),
     ];
   }, [vision]);
 
@@ -1093,10 +1101,16 @@ function VisionTab() {
     onSuccess: () => setLockedIn(true),
   });
 
+  const inventoryQuery = trpc.admin.getInventoryForFrog.useQuery(
+    { frogId: selectedFrogId! },
+    { enabled: selectedFrogId !== null },
+  );
+
   useTickSync(() => {
     console.log("Tick Resolved: Refetching Map Vision");
     void refetchVision();
     void refetchAllFrogs();
+    void inventoryQuery.refetch();
     equippedActionBar.refetch();
     setLockedIn(false);
   });
@@ -1279,50 +1293,64 @@ function VisionTab() {
 
       </div>
 
-      <ActionBar
-        selectedTile={selectedTile}
-        playerFrog={selectedFrog}
-        lockedIn={lockedIn}
-        equippedActions={equippedActionBar.equippedActions}
-        targetingMode={equippedActionBar.targetingMode}
-        playerTileChar={frogTileChar as TileChar | null}
-        onMove={(actionType) => {
-          if (!selectedFrogId || !selectedTile) return;
-          submitMove.mutate({
-            frogId:      selectedFrogId,
-            actionType,
-            targetGridX: selectedTile.gridX,
-            targetGridY: selectedTile.gridY,
-          });
-        }}
-        onAction={equippedActionBar.onAction}
-        onCancelTarget={equippedActionBar.onCancelTarget}
-        onPickup={() => {
-          if (!selectedFrogId || !selectedTile) return;
-          submitAction.mutate({
-            frogId:      selectedFrogId,
-            actionType:  "PICKUP",
-            targetGridX: selectedTile.gridX,
-            targetGridY: selectedTile.gridY,
-          });
-        }}
-        onCroak={() => {
-          if (!selectedFrogId) return;
-          submitAction.mutate({ frogId: selectedFrogId, actionType: "CROAK" });
-        }}
-        onOpenDoor={frogTileChar === "D" ? () => {
-          if (!selectedFrogId) return;
-          submitAction.mutate({ frogId: selectedFrogId, actionType: "OPEN_DOOR" });
-        } : undefined}
-        error={submitMove.error?.message ?? submitAction.error?.message ?? equippedActionBar.error}
-        tileDef={selectedTile ? getTileDef(
-          vision?.chunks[`${Math.floor(selectedTile.gridX / 16)}:${Math.floor(selectedTile.gridY / 16)}`]
-            ?.[((selectedTile.gridY % 16) + 16) % 16]
-            ?.[((selectedTile.gridX % 16) + 16) % 16] ?? ""
-        ) : null}
-      />
+      {selectedFrogId !== null && (
+        <>
+          <ActionBar
+            selectedTile={selectedTile}
+            playerFrog={selectedFrog}
+            lockedIn={lockedIn}
+            equippedActions={equippedActionBar.equippedActions}
+            targetingMode={equippedActionBar.targetingMode}
+            playerTileChar={frogTileChar as TileChar | null}
+            onMove={(actionType) => {
+              if (!selectedFrogId || !selectedTile) return;
+              submitMove.mutate({
+                frogId:      selectedFrogId,
+                actionType,
+                targetGridX: selectedTile.gridX,
+                targetGridY: selectedTile.gridY,
+              });
+            }}
+            onAction={equippedActionBar.onAction}
+            onCancelTarget={equippedActionBar.onCancelTarget}
+            onPickup={() => {
+              if (!selectedFrogId || !selectedTile) return;
+              submitAction.mutate({
+                frogId:      selectedFrogId,
+                actionType:  "PICKUP",
+                targetGridX: selectedTile.gridX,
+                targetGridY: selectedTile.gridY,
+              });
+            }}
+            onCroak={() => {
+              if (!selectedFrogId) return;
+              submitAction.mutate({ frogId: selectedFrogId, actionType: "CROAK" });
+            }}
+            onOpenDoor={frogTileChar === "D" ? () => {
+              if (!selectedFrogId) return;
+              submitAction.mutate({ frogId: selectedFrogId, actionType: "OPEN_DOOR" });
+            } : undefined}
+            error={submitMove.error?.message ?? submitAction.error?.message ?? equippedActionBar.error}
+            tileDef={selectedTile ? getTileDef(
+              vision?.chunks[`${Math.floor(selectedTile.gridX / 16)}:${Math.floor(selectedTile.gridY / 16)}`]
+                ?.[((selectedTile.gridY % 16) + 16) % 16]
+                ?.[((selectedTile.gridX % 16) + 16) % 16] ?? ""
+            ) : null}
+          />
 
-      <ActionLog logs={actionLogs} />
+          <div className="flex gap-3 items-start">
+            <ActionLog logs={actionLogs} />
+            <div className="flex-1">
+              <FrogStatPanel
+                frog={selectedFrog}
+                equippedItems={inventoryQuery.data ?? []}
+                frogSpriteManager={frogSpriteManager}
+                spriteVersion={spriteVersion}
+              />
+            </div>
+          </div>
+        </>
+      )}
 
     </div>
   );

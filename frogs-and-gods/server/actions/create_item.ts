@@ -15,7 +15,7 @@ export const createItemHandler: GodActionHandler = {
   },
 
   execute(ctx: GodActionContext, state: SimulatedState, out: UpdateInstruction[]): GodActionResult {
-    const { name, statsJson, pixelData, itemType, rarityTier } = CreateItemPayloadSchema.parse(ctx.payload);
+    const { name, statsJson, pixelData, itemType, lootType, rarityTier } = CreateItemPayloadSchema.parse(ctx.payload);
     const newItem = {
       itemId:    crypto.randomUUID(),
       name,
@@ -23,6 +23,7 @@ export const createItemHandler: GodActionHandler = {
       statsJson,
       itemState: "VOID",
       itemType,
+      lootType,
       pixelData: pixelData ?? null,
       ownerId: null,
       gridX: null,

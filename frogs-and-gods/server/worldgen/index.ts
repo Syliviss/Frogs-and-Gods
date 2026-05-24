@@ -6,9 +6,7 @@
 export { CHUNK_SIZE, generateChunk } from "./generator";
 export type { ChunkResult }          from "./generator";
 export { MACRO_GRID, WORLD_GRID_SIZE, GRID_RADIUS, WOLFRAM_RULE } from "./macroLayer";
-export { POI_REGISTRY }              from "./poiRegistry";
 export { BIOME_REGISTRY }            from "./biomeMap";
 export type { BiomeDef }             from "./biomeMap";
-export type { PoiDef, PoiType }      from "./poiTypes";
 
 export const WORLD_SEED = 42;

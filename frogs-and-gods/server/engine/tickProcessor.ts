@@ -17,8 +17,9 @@ import {
   getLairEntrancesByInstanceId,
   getLairEntrancesByOwnerGodId,
   getInstanceById,
+  getPoisInChunkArea,
 } from "../db";
-import { pendingActions, worldLogEvents, frogs, predators, items, gods, instances, lairEntrances, worldMapOverrides } from "../../drizzle/schema";
+import { pendingActions, worldLogEvents, frogs, predators, items, gods, instances, lairEntrances, worldMapOverrides, pointsOfInterest } from "../../drizzle/schema";
 import { runAction, GOD_ACTION_REGISTRY, PREDATOR_ACTION_REGISTRY, ACTION_REGISTRY } from "../actions/index";
 import { pickRandomMapEdgeTile } from "../actions/_spawnUtils";
 import type { NotifyFn, ActionContext } from "../actions/_types";
@@ -95,16 +96,24 @@ export async function processAllActions(notify: NotifyFn = () => {}): Promise<vo
     for (let x = minCX; x <= maxCX; x++)
       for (let y = minCY; y <= maxCY; y++) chunkCoords.push({ chunkX: x, chunkY: y });
 
-    const [areaFrogs, areaItems, areaPredators, areaChunks] = await Promise.all([
+    // POIs: load one chunk beyond the box so a moving frog's full 3×3 wake
+    // neighborhood is always covered, even when the box is tighter than that.
+    const poiCoords: { chunkX: number; chunkY: number }[] = [];
+    for (let x = minCX - 1; x <= maxCX + 1; x++)
+      for (let y = minCY - 1; y <= maxCY + 1; y++) poiCoords.push({ chunkX: x, chunkY: y });
+
+    const [areaFrogs, areaItems, areaPredators, areaChunks, areaPois] = await Promise.all([
       getFrogsInBounds(minGX, maxGX, minGY, maxGY),
       getItemsInBounds(minGX, maxGX, minGY, maxGY),
       getPredatorsInChunkArea(chunkCoords),
       getChunksInBoundingBox(minCX, maxCX, minCY, maxCY),
+      getPoisInChunkArea(poiCoords),
     ]);
     for (const f of areaFrogs) state.frogs.set(f.id, f);
     for (const i of areaItems) state.items.set(i.itemId, i);
     for (const p of areaPredators) state.predators.set(p.id, p);
     for (const c of areaChunks) state.chunks.set(`${c.chunkX},${c.chunkY}`, c);
+    for (const poi of areaPois) state.pois.set(poi.id, poi);
   }
 
   // Dispatch all neighborhoods in parallel. SimulatedState uses Maps, so overlapping
@@ -398,6 +407,7 @@ export async function processAllActions(notify: NotifyFn = () => {}): Promise<vo
     const itemUpdates = new Map<string, Partial<typeof items.$inferInsert>>();
     const godUpdates = new Map<number, Partial<typeof gods.$inferInsert>>();
     const instanceUpdates = new Map<number, Partial<typeof instances.$inferInsert>>();
+    const poiUpdates = new Map<number, Partial<typeof pointsOfInterest.$inferInsert>>();
     const frogsToInsert: (typeof frogs.$inferInsert)[] = [];
     const itemsToInsert: (typeof items.$inferInsert)[] = [];
     const godsToInsert: (typeof gods.$inferInsert)[] = [];
@@ -427,6 +437,9 @@ export async function processAllActions(notify: NotifyFn = () => {}): Promise<vo
       } else if (inst.type === "INSTANCE_UPDATE") {
         const id = inst.id as number;
         instanceUpdates.set(id, { ...instanceUpdates.get(id), ...inst.changes });
+      } else if (inst.type === "POI_UPDATE") {
+        const id = inst.id as number;
+        poiUpdates.set(id, { ...poiUpdates.get(id), ...inst.changes });
       } else if (inst.type === "FROG_INSERT") {
         frogsToInsert.push(inst.data);
       } else if (inst.type === "ITEM_INSERT") {
@@ -490,6 +503,9 @@ export async function processAllActions(notify: NotifyFn = () => {}): Promise<vo
     }
     for (const [id, changes] of Array.from(instanceUpdates.entries())) {
       await tx.update(instances).set(changes).where(eq(instances.id, id));
+    }
+    for (const [id, changes] of Array.from(poiUpdates.entries())) {
+      await tx.update(pointsOfInterest).set(changes).where(eq(pointsOfInterest.id, id));
     }
     if (instancesToInsert.length > 0) {
       await tx.insert(instances).values(instancesToInsert);

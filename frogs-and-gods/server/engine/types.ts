@@ -1,4 +1,4 @@
-import type { Frog, Predator, Item, WorldMapChunk, InsertWorldLogEvent, God, Instance, LairEntrance } from "../../drizzle/schema";
+import type { Frog, Predator, Item, WorldMapChunk, InsertWorldLogEvent, God, Instance, LairEntrance, PointOfInterest } from "../../drizzle/schema";
 
 export interface UpdateInstruction {
   type:
@@ -18,7 +18,8 @@ export interface UpdateInstruction {
     | "INSTANCE_INSERT"
     | "INSTANCE_UPDATE"
     | "LAIR_ENTRANCE_INSERT"
-    | "WORLD_MAP_OVERRIDE_INSERT";
+    | "WORLD_MAP_OVERRIDE_INSERT"
+    | "POI_UPDATE";
   id?: number | string;
   changes?: Record<string, any>;
   data?: any;
@@ -32,6 +33,7 @@ export class SimulatedState {
   public gods         = new Map<number, God>();
   public instances    = new Map<number, Instance>();
   public lairEntrances = new Map<number, LairEntrance>();
+  public pois         = new Map<number, PointOfInterest>();
 
   // ── Frogs ──
   getFrog(id: number): Frog | undefined {
@@ -81,6 +83,16 @@ export class SimulatedState {
   updateInstance(id: number, changes: Partial<Instance>) {
     const inst = this.instances.get(id);
     if (inst) Object.assign(inst, changes);
+  }
+
+  // ── Points of Interest ──
+  getPoi(id: number): PointOfInterest | undefined {
+    return this.pois.get(id);
+  }
+
+  updatePoi(id: number, changes: Partial<PointOfInterest>) {
+    const poi = this.pois.get(id);
+    if (poi) Object.assign(poi, changes);
   }
 
   // ── Spatial Queries (In-Memory) ──

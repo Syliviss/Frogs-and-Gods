@@ -22,7 +22,7 @@ interface ViewportProps {
   centerChunkX: number;
   centerChunkY: number;
   chunks: Record<string, string[][]>;
-  entities?: { gridX: number; gridY: number; type?: "frog" | "predator"; id?: number }[];
+  entities?: { gridX: number; gridY: number; type?: "frog" | "predator"; id?: number; enemyType?: string }[];
   groundItems?: { gridX: number; gridY: number; itemId: string }[];
   selectedTile?: { gridX: number; gridY: number };
   onTileClick?: (gridX: number, gridY: number) => void;
@@ -61,7 +61,7 @@ export function Viewport({
   const overlayRef = useRef<HTMLCanvasElement>(null);
 
   // Shared inverse isometric transform: screen coordinates → absolute grid tile
-  // Forward: screenX = (worldX - worldY) * 8 + 400, screenY = (worldX + worldY) * 4 + 150
+  // Forward: screenX = (worldX - worldY) * (TILE_W/2) + 400, screenY = (worldX + worldY) * (TILE_H/2) + 150
   // Solving for world: worldX = u/TILE_W + v/TILE_H, worldY = v/TILE_H - u/TILE_W
   const screenToGrid = useCallback(
     (clientX: number, clientY: number, rect: DOMRect) => {
@@ -172,8 +172,19 @@ export function Viewport({
       for (const entity of entities) {
         const { screenX, screenY } = tileToScreen(entity.gridX, entity.gridY);
         if (entity.type === "predator") {
-          ctx.fillStyle = "#ff4444";
-          ctx.fillText("S", screenX, screenY);
+          ctx.save();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = "#000000";
+          if (entity.enemyType === "GOLEM") {
+            ctx.strokeText("G", screenX, screenY);
+            ctx.fillStyle = "#808080";
+            ctx.fillText("G", screenX, screenY);
+          } else {
+            ctx.strokeText("S", screenX, screenY);
+            ctx.fillStyle = "#ff4444";
+            ctx.fillText("S", screenX, screenY);
+          }
+          ctx.restore();
         } else {
           const frogSprite = entity.id != null ? frogSpriteManager?.get(String(entity.id)) : undefined;
           if (frogSprite) {

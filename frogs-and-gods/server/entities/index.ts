@@ -1,5 +1,6 @@
 import { getActivePredators } from "../db";
 import { calculateSnakeIntent } from "./snake";
+import { calculateGolemIntent } from "./golem";
 import type { NotifyFn } from "../actions/_types";
 
 // ─────────────────────────────────────────────
@@ -25,7 +26,9 @@ export async function processEntityIntents(_notify: NotifyFn): Promise<void> {
   for (const predator of predators) {
     if (predator.enemyType === "SNAKE") {
       await calculateSnakeIntent(predator);
+    } else if (predator.enemyType === "GOLEM") {
+      await calculateGolemIntent(predator);
     }
-    // Future: FLY, TOAD, GOLEM, etc.
+    // Future: FLY, TOAD, etc.
   }
 }

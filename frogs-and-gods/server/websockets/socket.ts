@@ -5,6 +5,7 @@ import type { WorldLogPayload } from "../../shared/game.schema";
 import { heartbeat } from "../engine/heartbeat";
 import { processAllActions } from "../engine/tickProcessor";
 import { processEntityIntents } from "../entities/index";
+import { runPoiHeartbeatPass } from "../poi/processor";
 import { validateAndQueueMovement } from "../engine/movement";
 import { getFrogByOwnerId, getFrogById, createPendingAction, purgeResolvedActions, purgeDeadFrogs, purgeOldWorldLogEvents, getDb } from "../db";
 import { flushActionLogs } from "../engine/actionLog";
@@ -121,7 +122,15 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
   let broadcastPending = false;
   let _worldLogPurgeCycle = 0;
 
-  function runEngineBroadcast(): void {
+  async function runEngineBroadcast(): Promise<void> {
+    // POI heartbeat pass — runs and commits BEFORE ENGINE_TICK so players see POI
+    // activations (spawned predators) in the same vision refresh as everything else.
+    try {
+      await runPoiHeartbeatPass();
+    } catch (err) {
+      console.error("[POI] Heartbeat pass failed:", err);
+    }
+
     broadcast({ type: "ENGINE_TICK", timestamp: Date.now() });
     void purgeResolvedActions();
     void purgeDeadFrogs();
@@ -130,6 +139,10 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
       _worldLogPurgeCycle = 0;
       void purgeOldWorldLogEvents();
     }
+
+    // Entity AI for the new cycle — runs after the POI pass so predators spawned
+    // this heartbeat are committed and picked up by getActivePredators().
+    void processEntityIntents(emitToUser);
   }
 
   // ── 500ms engine loop: process pending DB actions ──
@@ -165,23 +178,18 @@ export function attachWebSocketServer(httpServer: HttpServer): WebSocketServer {
         tickInFlight = false;
         if (broadcastPending) {
           broadcastPending = false;
-          runEngineBroadcast();
+          void runEngineBroadcast();
         }
       });
   });
 
-  // ── 10s broadcast: push ENGINE_TICK so clients refetch their vision ──
+  // ── 10s broadcast: run the POI pass, push ENGINE_TICK, queue entity AI ──
   heartbeat.on("broadcast", () => {
     if (tickInFlight) {
       broadcastPending = true;
       return;
     }
-    runEngineBroadcast();
-  });
-
-  // ── Tick 0: entity AI queues intents for the new heartbeat cycle ──
-  heartbeat.on("cycle_start", () => {
-    void processEntityIntents(emitToUser);
+    void runEngineBroadcast();
   });
 
   wss.on("connection", (ws: WebSocket, _req: unknown) => {
