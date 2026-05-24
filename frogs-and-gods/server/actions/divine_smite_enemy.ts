@@ -3,6 +3,7 @@ import type { GodActionHandler, GodActionContext, GodActionResult } from "./god_
 import type { NotifyFn } from "./_types";
 import type { SimulatedState, UpdateInstruction } from "../engine/types";
 import { pushActionLog } from "../engine/actionLog";
+import { awardChunkXp } from "./_utils";
 
 const FAVOR_COST = 25;
 const SMITE_DAMAGE = 50;
@@ -34,6 +35,8 @@ export const divineSmiteEnemyHandler: GodActionHandler = {
     const newHp = predator.currentHp - SMITE_DAMAGE;
     if (newHp <= 0) {
       state.updatePredator(targetPredatorId, { currentHp: 0 });
+      awardChunkXp(state, predator, out);
+      state.predators.delete(targetPredatorId);
       out.push({ type: "PREDATOR_DELETE", id: targetPredatorId });
     } else {
       state.updatePredator(targetPredatorId, { currentHp: newHp });

@@ -300,6 +300,7 @@ Three separate `ActionHandler` exports: `stepHandler`, `hopHandler`, `swimHandle
 | **Distance** | Defined by item's `actionSchema.targeting.max_range` |
 | **Key rules** | Item must be EQUIPPED. Uses Generic Intent Builder (deferred resolveBucket via `cast_time_ms`). Applies `str + equippedAttackBonus` damage to all entities at each target tile. Same entity on multiple tiles receives multiple hits. Re-validates item equipped and tile range at execution time (frog may have moved during cast). |
 | **Fumble triggers** | `checkItemFumble()`. Item unequipped during cast = silent reject (not fumble). |
+| **On predator kill** | `applyDamage()` calls `dropPredatorLoot()` + `awardChunkXp()` before deleting the predator. Every living frog in the predator's chunk (matched on `instanceId`) receives the full `XP_REWARD_BY_ENEMY_TYPE[enemyType]` reward and a `FROG_XP_GAIN` / `FROG_LEVEL_UP` world log entry. |
 
 ---
 
@@ -402,7 +403,7 @@ God actions have no frog actor. They run in Pass 1 (before all other actions) an
 | | |
 |--|--|
 | **File** | `server/actions/kill_predator.ts` |
-| **Key rules** | Hard-deletes the predator row by ID. Not a combat death — no XP, no death event. Any items in `predators.lootItems` are dropped to `itemState = 'GROUND'` at the snake's head tile via `dropPredatorLoot()`. Used for divine removal from the admin panel. |
+| **Key rules** | Hard-deletes the predator row by ID. Drops loot via `dropPredatorLoot()` and awards chunk XP via `awardChunkXp()` before deletion — every living frog in the predator's chunk gets the full `XP_REWARD_BY_ENEMY_TYPE[enemyType]` reward. Used for divine removal from the admin panel. |
 
 ---
 
@@ -425,7 +426,7 @@ These actions are initiated by a specific god (not the system sentinel). `actorI
 |--|--|
 | **File** | `server/actions/divine_smite_enemy.ts` |
 | **Favor cost** | 25 |
-| **Key rules** | `payload.targetPredatorId` must be a predator with `currentHp > 0` in SimulatedState. Deals 50 flat damage — deletes predator row if lethal (pushes `PREDATOR_DELETE`), otherwise pushes `PREDATOR_UPDATE`. |
+| **Key rules** | `payload.targetPredatorId` must be a predator with `currentHp > 0` in SimulatedState. Deals 50 flat damage — if lethal, calls `awardChunkXp()` (chunk-mate XP grant), deletes the predator from state, and pushes `PREDATOR_DELETE`. If non-lethal, pushes `PREDATOR_UPDATE` with new HP. Loot is **not** dropped (intentional — divine smite vaporizes). |
 | **Validation** | God must have `favor >= 25`. Predator must exist and be alive. |
 
 ### DIV_SPAWN_ITEM

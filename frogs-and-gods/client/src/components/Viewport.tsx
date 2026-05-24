@@ -6,6 +6,19 @@ export interface FloatingText {
   text:      string;
   createdAt: number;
 }
+
+/** A FLING projectile arc (brown line) drawn from actor to target tile, plus an
+ *  optional yellow "Miss!" overlay on the target tile. Lasts FLING_DURATION_MS. */
+export interface FlingAnimation {
+  fromX:     number;
+  fromY:     number;
+  toX:       number;
+  toY:       number;
+  miss?:     boolean;
+  createdAt: number;
+}
+
+const FLING_DURATION_MS = 400;
 import { TILE_REGISTRY } from "../../../shared/tileRegistry";
 import type { TileChar } from "../../../shared/game.schema";
 import { spriteManager, SpriteManager } from "../lib/SpriteManager";

@@ -1,24 +1,15 @@
 // ─────────────────────────────────────────────
-// XP DISTRIBUTION — isolated for easy balancing
+// XP SYSTEM — isolated for easy balancing
 // ─────────────────────────────────────────────
 
-export interface CombatantStats {
-  id: number; name: string;
-  hp: number; maxHp: number;
-  mp: number; maxMp: number;
-  attack: number; defense: number; speed: number;
-  level: number; xp: number; isDead: boolean;
-}
+import type { Predator } from "../../drizzle/schema";
 
-export interface XpResult {
-  /** Map of frogId → xp awarded */
-  xpAwarded: Record<number, number>;
-  /** Map of frogId → whether they leveled up */
-  leveledUp: Record<number, boolean>;
-  /** Map of frogId → new level after XP (if leveled up) */
-  newLevel: Record<number, number>;
-  totalXpPool: number;
-}
+/** XP awarded to each chunk-mate frog when a predator of this enemyType dies. */
+export const XP_REWARD_BY_ENEMY_TYPE: Record<Predator["enemyType"], number> = {
+  SNAKE: 25,
+  GOLEM: 75,
+  FLY:    5,
+};
 
 /** XP required to reach the next level from a given level. */
 export function xpToNextLevel(level: number): number {
@@ -28,56 +19,35 @@ export function xpToNextLevel(level: number): number {
   return Math.round(BASE * Math.pow(level, SCALE));
 }
 
-/** Bonus XP multiplier for party play (more members = slightly less per person, but more total). */
-function partyBonus(memberCount: number): number {
-  if (memberCount <= 1) return 1.0;
-  if (memberCount === 2) return 0.85;
-  if (memberCount === 3) return 0.75;
-  return 0.65; // 4-player parties
+export interface XpApplyResult {
+  newCurrentXp:     number;
+  newLevel:         number;
+  newXpToNextLevel: number;
+  leveled:          boolean;
 }
 
 /**
- * Distribute XP from a defeated enemy to one or more Frogs.
- * XP is split equally among living party members with a party bonus applied.
- * Dead frogs receive no XP.
+ * Apply an XP gain to a frog's current XP/level, rolling over thresholds.
+ * Pure function — caller is responsible for writing the resulting fields to
+ * the DB (or queueing a FROG_UPDATE instruction).
  */
-export function distributeXp(
-  frogs: CombatantStats[],
-  baseXpReward: number
-): XpResult {
-  const livingFrogs = frogs.filter((f) => !f.isDead);
-  const memberCount = livingFrogs.length;
-
-  if (memberCount === 0) {
-    return {
-      xpAwarded: {},
-      leveledUp: {},
-      newLevel: {},
-      totalXpPool: 0,
-    };
+export function applyXpToFrog(
+  currentXp: number,
+  currentLevel: number,
+  amount: number
+): XpApplyResult {
+  let newXp    = currentXp + amount;
+  let newLevel = currentLevel;
+  let leveled  = false;
+  while (newXp >= xpToNextLevel(newLevel)) {
+    newXp -= xpToNextLevel(newLevel);
+    newLevel++;
+    leveled = true;
   }
-
-  const bonus = partyBonus(memberCount);
-  const totalXpPool = Math.round(baseXpReward * bonus);
-  const xpPerFrog = Math.round(totalXpPool / memberCount);
-
-  const xpAwarded: Record<number, number> = {};
-  const leveledUp: Record<number, boolean> = {};
-  const newLevel: Record<number, number> = {};
-
-  for (const frog of livingFrogs) {
-    xpAwarded[frog.id] = xpPerFrog;
-    const newXp = frog.xp + xpPerFrog;
-    const threshold = xpToNextLevel(frog.level);
-
-    if (newXp >= threshold) {
-      leveledUp[frog.id] = true;
-      newLevel[frog.id] = frog.level + 1;
-    } else {
-      leveledUp[frog.id] = false;
-      newLevel[frog.id] = frog.level;
-    }
-  }
-
-  return { xpAwarded, leveledUp, newLevel, totalXpPool };
+  return {
+    newCurrentXp:     newXp,
+    newLevel,
+    newXpToNextLevel: xpToNextLevel(newLevel),
+    leveled,
+  };
 }

@@ -18,11 +18,19 @@ export function useEquippedActionBar({ frogId, frogPos, onSuccess }: Options) {
 
   const intentBuilder = useItemIntentBuilder({ frogId, frogPos, onSuccess });
 
+  // FLING / FLING_CONSUME bypass targeting — the server auto-picks the nearest entity.
+  const submitDirect = trpc.admin.submitItemActionForFrog.useMutation({ onSuccess });
+
   const onAction = useCallback(
-    (_actionName: string, itemId: string, actionSchema?: ActionSchema | null) => {
+    (actionName: string, itemId: string, actionSchema?: ActionSchema | null) => {
+      if (actionName === "FLING" || actionName === "FLING_CONSUME") {
+        if (frogId == null) return;
+        submitDirect.mutate({ frogId, itemId, action: actionName });
+        return;
+      }
       if (actionSchema) intentBuilder.startTargeting(itemId, actionSchema);
     },
-    [intentBuilder],
+    [intentBuilder, submitDirect, frogId],
   );
 
   const refetch = useCallback(() => {

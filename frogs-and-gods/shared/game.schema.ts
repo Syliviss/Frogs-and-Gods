@@ -229,6 +229,19 @@ export const ActionSchemaSchema = z.object({
 });
 export type ActionSchema = z.infer<typeof ActionSchemaSchema>;
 
+/** Per-projectile FLING tuning embedded on items that grant FLING / FLING_CONSUME.
+ *  Defaults applied by the handler when fields are absent. */
+export const FlingProfileSchema = z.object({
+  baseDamage:     z.number().int().nonnegative().default(3),
+  maxRange:       z.number().int().positive().default(8),
+  breathPerSpace: z.number().int().nonnegative().default(1),
+  hitCount:       z.number().int().positive().default(1),
+  multiHitMode:   z.enum(["REROLL", "SCATTER"]).default("REROLL"),
+  /** Secondary effect fired only by FLING_CONSUME when the projectile is destroyed. */
+  consumeEffect:  z.enum(["NONE", "EXPLODE", "POISON", "WRAPPED"]).default("NONE"),
+});
+export type FlingProfile = z.infer<typeof FlingProfileSchema>;
+
 export const ItemStatsSchema = z.object({
   attackBonus:    z.number().int().optional(),
   defenseBonus:   z.number().int().optional(),
@@ -240,6 +253,13 @@ export const ItemStatsSchema = z.object({
   wisBonus:       z.number().int().optional(),
   intBonus:       z.number().int().optional(),
   chaBonus:       z.number().int().optional(),
+  /** Ranged passive buffs — summed into the wearer's equippedRanged*Bonus on EQUIP.
+   *  Shared by FLING and any future ranged action (SPIT, CAST). */
+  rangedDamageBonus:     z.number().int().optional(),
+  rangedHitBonus:        z.number().int().optional(),
+  rangedRangeBonus:      z.number().int().optional(),
+  rangedBreathReduction: z.number().int().optional(),
+  rangedHitCount:        z.number().int().optional(),
   /** Actions this item grants when EQUIPPED */
   grantedActions: z.array(z.string()).optional(),
   /** Actions this item blocks (triggers Fumble) while in frog's inventory */
@@ -248,6 +268,8 @@ export const ItemStatsSchema = z.object({
   /** Targeting + cast parameters for the action this item grants.
    *  When present, the frontend enters targeting mode instead of acting immediately. */
   actionSchema:   ActionSchemaSchema.optional(),
+  /** FLING-specific projectile tuning. Present on items that grant FLING or FLING_CONSUME. */
+  flingProfile:   FlingProfileSchema.optional(),
 });
 export type ItemStats = z.infer<typeof ItemStatsSchema>;
 

@@ -68,8 +68,17 @@ export interface FrogStats {
   equippedWisBonus:     number;
   equippedIntBonus:     number;
   equippedChaBonus:     number;
+  /** Ranged action passive buffs — summed across EQUIPPED items by recalcEquippedBonuses.
+   *  Read by FLING (and future ranged actions: SPIT, CAST). Default 0 when absent. */
+  equippedRangedDamageBonus?:     number;
+  equippedRangedHitBonus?:        number;
+  equippedRangedRangeBonus?:      number;
+  equippedRangedBreathReduction?: number;
+  equippedRangedHitCount?:        number;
   /** Predator id currently constricting this frog. Null or absent = free. */
   wrappedBy?: number | null;
+  /** Item id wrapping this frog (e.g. from FLING_CONSUME with consumeEffect "WRAPPED"). */
+  wrappedByItem?: string | null;
 }
 
 export const DEFAULT_FROG_STATS: FrogStats = {
@@ -216,6 +225,15 @@ export interface ActionSchema {
   cast_time_ms: number;
 }
 
+export interface FlingProfile {
+  baseDamage:     number;
+  maxRange:       number;
+  breathPerSpace: number;
+  hitCount:       number;
+  multiHitMode:   "REROLL" | "SCATTER";
+  consumeEffect:  "NONE" | "EXPLODE" | "POISON" | "WRAPPED";
+}
+
 export interface ItemStats {
   attackBonus?:    number;
   defenseBonus?:   number;
@@ -227,6 +245,13 @@ export interface ItemStats {
   wisBonus?:       number;
   intBonus?:       number;
   chaBonus?:       number;
+  /** Ranged passive buffs — summed across equipped items into the actor's
+   *  equippedRanged*Bonus fields. Shared by FLING and future ranged actions. */
+  rangedDamageBonus?:     number;
+  rangedHitBonus?:        number;
+  rangedRangeBonus?:      number;
+  rangedBreathReduction?: number;
+  rangedHitCount?:        number;
   /** Actions this item grants when EQUIPPED (e.g. ["TONGUE_STRIKE", "DEVOUR"]) */
   grantedActions?: string[];
   /** Actions this item blocks in the frog's inventory (triggers Fumble) */
@@ -234,6 +259,8 @@ export interface ItemStats {
   visionModifier?: number;
   /** Server-driven targeting schema — present on weapons that use the Generic Intent Builder */
   actionSchema?:   ActionSchema;
+  /** Projectile-specific FLING tuning. Present on items that grant FLING/FLING_CONSUME. */
+  flingProfile?:   FlingProfile;
   [key: string]:   unknown;
 }
 
@@ -365,6 +392,13 @@ export interface PredatorStats {
   wrapping?:   { targetFrogId: number } | null;
   /** Persisted 8-direction unit vector {dx,dy} ∈ {-1,0,1}². Set on first SLITHER, updated each move. */
   facing?:     { dx: number; dy: number };
+  /** Ranged action passive buffs — set per-enemy-type in the entity AI file's init.
+   *  Read by FLING (predator path) the same way frogs read equippedRanged*Bonus. */
+  equippedRangedDamageBonus?:     number;
+  equippedRangedHitBonus?:        number;
+  equippedRangedRangeBonus?:      number;
+  equippedRangedBreathReduction?: number;
+  equippedRangedHitCount?:        number;
   [key: string]: unknown;
 }
 
@@ -378,6 +412,9 @@ export const predators = pgTable("predators", {
   chunkX:       integer("chunk_x").notNull(),
   chunkY:       integer("chunk_y").notNull(),
   currentHp:    integer("current_hp").notNull(),
+  /** Breath pool consumed by FLING (cost = spaces thrown). Snakes/golems init to 1 and never use it. */
+  currentBreath: integer("current_breath").default(1).notNull(),
+  maxBreath:     integer("max_breath").default(1).notNull(),
   /** Dedicated column — enables fast WHERE currentTick - lastMealTick > 180 queries */
   lastMealTick: integer("last_meal_tick").default(0).notNull(),
   /** Flexible AI state, mutations, path data */

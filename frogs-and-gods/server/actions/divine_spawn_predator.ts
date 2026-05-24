@@ -45,6 +45,8 @@ export const divineSpawnPredatorHandler: GodActionHandler = {
       chunkX,
       chunkY,
       currentHp: hp,
+      currentBreath: 1,
+      maxBreath:     1,
       lastMealTick: Math.floor(Date.now() / 10_000),
       statsJson: { speed, segments: [{ x: gridX - 1, y: gridY }, { x: gridX - 2, y: gridY }] },
     };

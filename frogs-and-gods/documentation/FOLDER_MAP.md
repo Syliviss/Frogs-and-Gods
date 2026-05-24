@@ -128,7 +128,7 @@ Every action handler lives here. The central registry is `index.ts`.
 | File | Purpose |
 |------|---------|
 | `_types.ts` | `ActionHandler` interface, `ActionContext`, `checkItemFumble()` utility |
-| `_utils.ts` | Shared utilities: `getTerrainAt()`, `getEntitiesAt()`, `applyDamage()` |
+| `_utils.ts` | Shared utilities: `getTerrainAt()`, `getEntitiesAt()`, `applyDamage()`, `dropPredatorLoot()`, `awardChunkXp()` (pipeline-path chunk-mate XP grant on predator death) |
 | `_spawnUtils.ts` | Spawn tile helpers: `findSpawnTileNearLair()`, `pickRandomMapEdgeTile()`, `calcMaxBreath(dex)` (dex → breath formula) |
 | `_conditionUtils.ts` | `rollConditionCheck()` — on-demand condition evaluation (WRAP escape, etc.) |
 | `_moveHelper.ts` | `validateMove()` — shared movement validation used by STEP and HOP |
@@ -178,7 +178,7 @@ The heartbeat and action resolution core.
 | `types.ts` | `SimulatedState` class + `UpdateInstruction` type |
 | `movement.ts` | `validateAndQueueMovement()` — server-side pre-validation for STEP/HOP |
 | `actionLog.ts` | `pushActionLog()` — ephemeral action log buffer, flushed as `SUBTICK_LOGS` |
-| `xpDistributor.ts` | XP calculation and distribution helpers |
+| `xpDistributor.ts` | `xpToNextLevel()` curve, `applyXpToFrog()` level-up math, `XP_REWARD_BY_ENEMY_TYPE` per-enemy XP table |
 | `heartbeat.test.ts` | Heartbeat timer tests |
 | `movement.test.ts` | Movement validation tests |
 

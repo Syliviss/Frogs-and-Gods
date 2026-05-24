@@ -11,6 +11,7 @@ import { throwHandler } from "./throw";
 import { storeHandler } from "./store";
 import { giveHandler } from "./give";
 import { swingHandler } from "./swing";
+import { flingHandler, flingPredatorHandler } from "./fling";
 import { pickupHandler } from "./pickup";
 import { createItemHandler } from "./create_item";
 import { spawnItemHandler } from "./spawn_item";
@@ -43,18 +44,20 @@ export { PREDATOR_ACTION_TYPES } from "./_predator_action_types";
 // ─────────────────────────────────────────────
 
 const ACTION_REGISTRY: Record<string, ActionHandler> = {
-  STEP:       stepHandler,
-  HOP:        hopHandler,
-  SWIM:       swimHandler,
-  EQUIP:      equipHandler,
-  UNEQUIP:    unequipHandler,
-  THROW:      throwHandler,
-  STORE_ITEM: storeHandler,
-  GIVE:       giveHandler,
-  SWING:      swingHandler,
-  PICKUP:     pickupHandler,
-  OPEN_DOOR:  openDoorHandler,
-  CROAK:      croakHandler,
+  STEP:          stepHandler,
+  HOP:           hopHandler,
+  SWIM:          swimHandler,
+  EQUIP:         equipHandler,
+  UNEQUIP:       unequipHandler,
+  THROW:         throwHandler,
+  STORE_ITEM:    storeHandler,
+  GIVE:          giveHandler,
+  SWING:         swingHandler,
+  FLING:         flingHandler,
+  FLING_CONSUME: flingHandler,
+  PICKUP:        pickupHandler,
+  OPEN_DOOR:     openDoorHandler,
+  CROAK:         croakHandler,
 };
 
 export const GOD_ACTION_REGISTRY: Record<string, GodActionHandler> = {
@@ -78,6 +81,7 @@ export const PREDATOR_ACTION_REGISTRY: Record<string, PredatorActionHandler> = {
   STRIKE:  strikeHandler,
   WRAP:    wrapHandler,
   CRUSH:   crushHandler,
+  FLING:   flingPredatorHandler,
 };
 
 export { ACTION_REGISTRY };

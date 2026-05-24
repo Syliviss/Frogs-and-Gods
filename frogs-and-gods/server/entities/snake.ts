@@ -7,6 +7,7 @@ import {
   updateItem,
   deletePredator,
   getChunksByCoords,
+  awardChunkXpDirect,
 } from "../db";
 import { CHUNK_SIZE } from "../utils/worldGenerator";
 import type { Predator, PredatorStats, Frog } from "../../drizzle/schema";
@@ -188,6 +189,7 @@ export async function calculateSnakeIntent(predator: Predator): Promise<void> {
         instanceId: predator.instanceId ?? null,
       });
     }
+    await awardChunkXpDirect(predator);
     await deletePredator(predator.id);
     return;
   }

@@ -6,15 +6,20 @@ import { useState, useCallback, useEffect } from "react";
 
 const KNOWN_ACTIONS = [
   "STEP", "HOP", "EQUIP", "UNEQUIP",
-  "THROW", "STORE_ITEM", "GIVE", "SWING", "PICKUP",
+  "THROW", "STORE_ITEM", "GIVE", "SWING", "FLING", "FLING_CONSUME", "PICKUP",
 ] as const;
 
 const BONUS_FIELDS = [
   "attackBonus", "defenseBonus", "hpBonus", "manaBonus", "breathBonus",
   "strBonus", "dexBonus", "wisBonus", "intBonus", "chaBonus",
+  "rangedDamageBonus", "rangedHitBonus", "rangedRangeBonus",
+  "rangedBreathReduction", "rangedHitCount",
 ] as const;
 type BonusField = (typeof BONUS_FIELDS)[number];
 type Bonuses = Record<BonusField, number>;
+
+const MULTI_HIT_MODES = ["REROLL", "SCATTER"] as const;
+const CONSUME_EFFECTS = ["NONE", "EXPLODE", "POISON", "WRAPPED"] as const;
 
 type Template = "item" | "custom";
 
@@ -54,6 +59,15 @@ interface ItemState {
   targetingCount:    number;
   adjacencyRequired: boolean;
   maxRange:          number;
+  // Fling profile (separate from generic action — items may grant FLING in addition to or instead of an actionSchema action)
+  grantsFling:        boolean;
+  grantsFlingConsume: boolean;
+  flingBaseDamage:    number;
+  flingMaxRange:      number;
+  flingBreathPerSpace: number;
+  flingHitCount:      number;
+  flingMultiHitMode:  (typeof MULTI_HIT_MODES)[number];
+  flingConsumeEffect: (typeof CONSUME_EFFECTS)[number];
 }
 
 const EMPTY_BONUSES: Bonuses = BONUS_FIELDS.reduce(
@@ -70,6 +84,14 @@ const DEFAULT_STATE: ItemState = {
   targetingCount:    1,
   adjacencyRequired: false,
   maxRange:          1,
+  grantsFling:        false,
+  grantsFlingConsume: false,
+  flingBaseDamage:    3,
+  flingMaxRange:      8,
+  flingBreathPerSpace: 1,
+  flingHitCount:      1,
+  flingMultiHitMode:  "REROLL",
+  flingConsumeEffect: "NONE",
 };
 
 function buildItemStats(s: ItemState): object {
@@ -78,9 +100,11 @@ function buildItemStats(s: ItemState): object {
     if (s.bonuses[k] !== 0) out[k] = s.bonuses[k];
   }
   if (s.blockedActions.length > 0) out.blockedActions = s.blockedActions;
+
+  const grants: string[] = [];
   if (s.grantsAction && s.actionName.trim() !== "") {
     const name = s.actionName.trim();
-    out.grantedActions = [name];
+    grants.push(name);
     out.actionSchema = {
       action_name: name,
       cast_time_ms: s.castTimeMs,
@@ -90,6 +114,20 @@ function buildItemStats(s: ItemState): object {
         adjacency_required: s.adjacencyRequired,
         max_range: s.maxRange,
       },
+    };
+  }
+  if (s.grantsFling)        grants.push("FLING");
+  if (s.grantsFlingConsume) grants.push("FLING_CONSUME");
+  if (grants.length > 0) out.grantedActions = grants;
+
+  if (s.grantsFling || s.grantsFlingConsume) {
+    out.flingProfile = {
+      baseDamage:     s.flingBaseDamage,
+      maxRange:       s.flingMaxRange,
+      breathPerSpace: s.flingBreathPerSpace,
+      hitCount:       s.flingHitCount,
+      multiHitMode:   s.flingMultiHitMode,
+      consumeEffect:  s.grantsFlingConsume ? s.flingConsumeEffect : "NONE",
     };
   }
   return out;
@@ -102,9 +140,13 @@ function tryParseItem(json: string): Partial<ItemState> | null {
     for (const k of BONUS_FIELDS) {
       if (typeof obj[k] === "number") bonuses[k] = obj[k];
     }
-    const grantedActions = Array.isArray(obj.grantedActions) ? obj.grantedActions : [];
-    const grantsAction   = grantedActions.length > 0 || !!obj.actionSchema;
-    const actionName     = obj.actionSchema?.action_name ?? grantedActions[0] ?? "SWING";
+    const grantedActions   = Array.isArray(obj.grantedActions) ? obj.grantedActions : [];
+    const grantsFling      = grantedActions.includes("FLING");
+    const grantsFlingConsume = grantedActions.includes("FLING_CONSUME");
+    const nonFling         = grantedActions.filter((a: string) => a !== "FLING" && a !== "FLING_CONSUME");
+    const grantsAction     = nonFling.length > 0 || !!obj.actionSchema;
+    const actionName       = obj.actionSchema?.action_name ?? nonFling[0] ?? "SWING";
+    const fp               = obj.flingProfile ?? {};
     return {
       bonuses,
       blockedActions:    Array.isArray(obj.blockedActions) ? obj.blockedActions : [],
@@ -114,6 +156,14 @@ function tryParseItem(json: string): Partial<ItemState> | null {
       targetingCount:    obj.actionSchema?.targeting?.count ?? 1,
       adjacencyRequired: obj.actionSchema?.targeting?.adjacency_required ?? false,
       maxRange:          obj.actionSchema?.targeting?.max_range ?? 1,
+      grantsFling,
+      grantsFlingConsume,
+      flingBaseDamage:     typeof fp.baseDamage     === "number" ? fp.baseDamage     : 3,
+      flingMaxRange:       typeof fp.maxRange       === "number" ? fp.maxRange       : 8,
+      flingBreathPerSpace: typeof fp.breathPerSpace === "number" ? fp.breathPerSpace : 1,
+      flingHitCount:       typeof fp.hitCount       === "number" ? fp.hitCount       : 1,
+      flingMultiHitMode:   MULTI_HIT_MODES.includes(fp.multiHitMode)  ? fp.multiHitMode  : "REROLL",
+      flingConsumeEffect:  CONSUME_EFFECTS.includes(fp.consumeEffect) ? fp.consumeEffect : "NONE",
     };
   } catch {
     return null;
@@ -337,6 +387,68 @@ export function ItemStatsForm({ value, onChange }: ItemStatsFormProps) {
                     <span style={{ fontSize: 11, color: "#9ca3af" }}>require adjacency</span>
                   </label>
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Fling Profile ── */}
+          <div>
+            <p style={{ ...LABEL_STYLE, color: "#60a5fa", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Fling Profile
+            </p>
+            <div style={{ display: "flex", gap: 14, paddingLeft: 8, borderLeft: "2px solid #1e2a3a", marginBottom: 8 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={item.grantsFling}
+                  onChange={(e) => setItem((s) => ({ ...s, grantsFling: e.target.checked }))}
+                  style={{ accentColor: "#60a5fa" }}
+                />
+                <span style={{ fontSize: 11, color: item.grantsFling ? "#93c5fd" : "#9ca3af", fontFamily: "monospace" }}>
+                  Grants FLING <span style={{ color: "#4b5563" }}>(persistent)</span>
+                </span>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={item.grantsFlingConsume}
+                  onChange={(e) => setItem((s) => ({ ...s, grantsFlingConsume: e.target.checked }))}
+                  style={{ accentColor: "#f87171" }}
+                />
+                <span style={{ fontSize: 11, color: item.grantsFlingConsume ? "#fca5a5" : "#9ca3af", fontFamily: "monospace" }}>
+                  Grants FLING_CONSUME <span style={{ color: "#4b5563" }}>(destroys item on use)</span>
+                </span>
+              </label>
+            </div>
+
+            {(item.grantsFling || item.grantsFlingConsume) && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, paddingLeft: 8, borderLeft: "2px solid #1e2a3a" }}>
+                <NumberField label="baseDamage"       hint="flat damage"          value={item.flingBaseDamage}     min={0} onChange={(n) => setItem((s) => ({ ...s, flingBaseDamage:     Math.max(0, n) }))} />
+                <NumberField label="maxRange"         hint="Chebyshev tiles"      value={item.flingMaxRange}       min={1} onChange={(n) => setItem((s) => ({ ...s, flingMaxRange:       Math.max(1, n) }))} />
+                <NumberField label="breathPerSpace"   hint="cost per tile thrown" value={item.flingBreathPerSpace} min={0} onChange={(n) => setItem((s) => ({ ...s, flingBreathPerSpace: Math.max(0, n) }))} />
+                <NumberField label="hitCount"         hint="# of rolls / targets" value={item.flingHitCount}       min={1} onChange={(n) => setItem((s) => ({ ...s, flingHitCount:       Math.max(1, n) }))} />
+                <div>
+                  <p style={LABEL_STYLE}>multiHitMode <span style={{ color: "#4b5563" }}>REROLL = same target · SCATTER = N nearest</span></p>
+                  <select
+                    value={item.flingMultiHitMode}
+                    onChange={(e) => setItem((s) => ({ ...s, flingMultiHitMode: e.target.value as (typeof MULTI_HIT_MODES)[number] }))}
+                    style={{ ...INPUT_STYLE, fontFamily: "monospace" }}
+                  >
+                    {MULTI_HIT_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </div>
+                {item.grantsFlingConsume && (
+                  <div>
+                    <p style={LABEL_STYLE}>consumeEffect <span style={{ color: "#4b5563" }}>fires on FLING_CONSUME</span></p>
+                    <select
+                      value={item.flingConsumeEffect}
+                      onChange={(e) => setItem((s) => ({ ...s, flingConsumeEffect: e.target.value as (typeof CONSUME_EFFECTS)[number] }))}
+                      style={{ ...INPUT_STYLE, fontFamily: "monospace" }}
+                    >
+                      {CONSUME_EFFECTS.map((m) => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                  </div>
+                )}
               </div>
             )}
           </div>

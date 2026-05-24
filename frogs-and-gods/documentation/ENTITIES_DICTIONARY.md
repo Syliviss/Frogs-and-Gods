@@ -153,6 +153,7 @@ Snakes that have been starved for over 1 hour are silently deleted at the start 
 - **Checked at:** top of `calculateSnakeIntent`, before the wrapping check
 - **Wrap exemption:** A snake actively constricting a frog (`stats.wrapping != null`) is skipped. It finishes the constriction; on the next `cycle_start` after the target frog is gone and `wrapping` is cleared, the starvation check fires
 - **No world log** — the predator row is hard-deleted via `deletePredator(id)` with no broadcast (any carried loot is dropped first — see Loot Carry & Drop)
+- **Chunk XP grant** — immediately before `deletePredator()`, `awardChunkXpDirect(predator)` is called. Every living frog in the snake's chunk (matched on `instanceId`) receives the full `XP_REWARD_BY_ENEMY_TYPE.SNAKE` reward via a direct DB write. This bypasses the Exhale pipeline because starvation runs in the entity-intent phase, not as a pending action.
 - **Pre-existing snakes:** Snakes that existed in the DB before this feature shipped have `lastMealTick = 0` and will despawn on their first `cycle_start`
 
 ### Loot Carry & Drop
@@ -298,6 +299,10 @@ All 9 golem tiles physically block frog movement:
 ### Loot
 
 Golems can carry `GOLEM_LOOT` items (loot pool currently empty — items to be created separately). On death or starvation despawn, all carried items drop to the ground at the golem's center tile. Spawn loot: same 10% chance as snakes, using the GOLEM_LOOT pool.
+
+### Chunk XP Grant on Death
+
+Both pipeline kills (via `applyDamage` → `awardChunkXp`) and starvation despawn (via `awardChunkXpDirect` called right before `deletePredator`) grant `XP_REWARD_BY_ENEMY_TYPE.GOLEM` (75 XP) to every living frog in the golem's chunk, matched on `instanceId`.
 
 ---
 

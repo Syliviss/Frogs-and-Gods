@@ -2,7 +2,7 @@ import type { GodActionHandler, GodActionContext, GodActionResult } from "./god_
 import type { NotifyFn } from "./_types";
 import { KillPredatorPayloadSchema } from "../../shared/game.schema";
 import { pushActionLog } from "../engine/actionLog";
-import { dropPredatorLoot } from "./_utils";
+import { dropPredatorLoot, awardChunkXp } from "./_utils";
 import type { SimulatedState, UpdateInstruction } from "../engine/types";
 
 export const killPredatorHandler: GodActionHandler = {
@@ -22,7 +22,10 @@ export const killPredatorHandler: GodActionHandler = {
   execute(ctx: GodActionContext, state: SimulatedState, out: UpdateInstruction[]): GodActionResult {
     const { predatorId } = KillPredatorPayloadSchema.parse(ctx.payload);
     const predator = state.getPredator(predatorId);
-    if (predator) dropPredatorLoot(predator, out);
+    if (predator) {
+      dropPredatorLoot(predator, out);
+      awardChunkXp(state, predator, out);
+    }
     state.predators.delete(predatorId);
     out.push({ type: "PREDATOR_DELETE", id: predatorId });
     return { success: true, data: { predatorId } };

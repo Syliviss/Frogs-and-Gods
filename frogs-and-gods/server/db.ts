@@ -1,6 +1,8 @@
 import { and, count, desc, eq, getTableColumns, gte, inArray, isNotNull, isNull, lte, not, or, sql } from "drizzle-orm";
 import { GOD_ACTION_TYPES } from "./actions/_god_action_types";
 import { PREDATOR_ACTION_TYPES } from "./actions/_predator_action_types";
+import { XP_REWARD_BY_ENEMY_TYPE, applyXpToFrog } from "./engine/xpDistributor";
+import { CHUNK_SIZE } from "./utils/worldGenerator";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import {
@@ -714,6 +716,43 @@ export async function deletePredator(id: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db.delete(predators).where(eq(predators.id, id));
+}
+
+/**
+ * Direct-DB XP grant for predator death paths that bypass the tick pipeline
+ * (currently: snake & golem starvation in entities/). For tick-pipeline deaths,
+ * use `awardChunkXp` from server/actions/_utils.ts instead.
+ *
+ * Each living frog in the same chunk (and same instance) as the predator
+ * receives the full reward.
+ */
+export async function awardChunkXpDirect(predator: Predator): Promise<void> {
+  const reward = XP_REWARD_BY_ENEMY_TYPE[predator.enemyType] ?? 0;
+  if (reward <= 0) return;
+
+  const chunkX = Math.floor(predator.gridX / CHUNK_SIZE);
+  const chunkY = Math.floor(predator.gridY / CHUNK_SIZE);
+
+  const candidates = predator.instanceId != null
+    ? (await getFrogsByInstanceId(predator.instanceId))
+        .filter(f => Math.floor(f.gridX / CHUNK_SIZE) === chunkX
+                  && Math.floor(f.gridY / CHUNK_SIZE) === chunkY)
+    : await getFrogsInBounds(
+        chunkX * CHUNK_SIZE,
+        chunkX * CHUNK_SIZE + CHUNK_SIZE - 1,
+        chunkY * CHUNK_SIZE,
+        chunkY * CHUNK_SIZE + CHUNK_SIZE - 1,
+      );
+
+  for (const frog of candidates) {
+    if (frog.isDead) continue;
+    const result = applyXpToFrog(frog.currentXp, frog.level, reward);
+    await updateFrog(frog.id, {
+      currentXp:     result.newCurrentXp,
+      level:         result.newLevel,
+      xpToNextLevel: result.newXpToNextLevel,
+    });
+  }
 }
 
 export async function getPendingPredatorActions(currentBucket: number): Promise<PendingAction[]> {

@@ -41,6 +41,8 @@ export const spawnPredatorHandler: GodActionHandler = {
       chunkX,
       chunkY,
       currentHp: hp,
+      currentBreath: 1,
+      maxBreath:     1,
       lastMealTick: Math.floor(Date.now() / 10_000),
       statsJson,
     };

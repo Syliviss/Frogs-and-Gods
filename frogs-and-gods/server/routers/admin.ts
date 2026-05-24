@@ -38,7 +38,7 @@ import {
   updateGod,
 } from "../db";
 import { getPoiTypeDef } from "../poi/registry";
-import { xpToNextLevel } from "../engine/xpDistributor";
+import { applyXpToFrog } from "../engine/xpDistributor";
 import {
   ActionSchemaSchema,
   CreateFrogSchema,
@@ -126,23 +126,20 @@ export const adminRouter = router({
       const frog = await getFrogById(input.frogId);
       if (!frog) throw new TRPCError({ code: "NOT_FOUND", message: "Frog not found." });
 
-      let newXp    = frog.currentXp + input.amount;
-      let newLevel = frog.level;
-      let leveled  = false;
-
-      while (newXp >= xpToNextLevel(newLevel)) {
-        newXp -= xpToNextLevel(newLevel);
-        newLevel++;
-        leveled = true;
-      }
+      const result = applyXpToFrog(frog.currentXp, frog.level, input.amount);
 
       await updateFrog(frog.id, {
-        currentXp:     newXp,
-        level:         newLevel,
-        xpToNextLevel: xpToNextLevel(newLevel),
+        currentXp:     result.newCurrentXp,
+        level:         result.newLevel,
+        xpToNextLevel: result.newXpToNextLevel,
       });
 
-      return { success: true, leveled, newLevel, newXp };
+      return {
+        success:  true,
+        leveled:  result.leveled,
+        newLevel: result.newLevel,
+        newXp:    result.newCurrentXp,
+      };
     }),
 
   resurrectFrog: publicProcedure
@@ -515,7 +512,8 @@ export const adminRouter = router({
       frogId:      z.number().int().positive(),
       itemId:      z.string().uuid(),
       action:      z.string().min(1).max(64),
-      targetTiles: z.array(z.object({ x: z.number().int(), y: z.number().int() })).min(1).max(16),
+      // Optional for actions that don't use tile-targeting (e.g. FLING auto-picks nearest entity).
+      targetTiles: z.array(z.object({ x: z.number().int(), y: z.number().int() })).max(16).optional(),
     }))
     .mutation(async ({ input }) => {
       // 1. Resolve frog
@@ -532,7 +530,31 @@ export const adminRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Item is not equipped by this frog." });
       }
 
-      // 4. Parse action_schema from the item
+      // 4. Confirm the item grants the requested action
+      const grants = item.statsJson.grantedActions ?? [];
+      if (!grants.includes(input.action)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `Item does not grant "${input.action}".` });
+      }
+
+      // ── FLING / FLING_CONSUME: auto-target (no tiles), instant resolve ──
+      const isFling = input.action === "FLING" || input.action === "FLING_CONSUME";
+      if (isFling) {
+        const inPoise = await hasPendingActionForFrog(input.frogId);
+        if (inPoise) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Frog is in Poise — an action is already pending." });
+        }
+        const resolveBucket = Math.floor(Date.now() / 500);
+        const action = await createPendingAction({
+          actorId:       input.frogId,
+          actionType:    input.action,
+          resolveBucket,
+          payload:       { itemId: input.itemId },
+        });
+        return { queued: true, pendingActionId: action.id, resolvesInMs: 0 };
+      }
+
+      // ── Schema-driven targeting actions (SWING, etc.) ──
+      const tiles = input.targetTiles ?? [];
       const schemaParse = ActionSchemaSchema.safeParse(item.statsJson.actionSchema);
       if (!schemaParse.success) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Item has no valid action schema." });
@@ -541,17 +563,13 @@ export const adminRouter = router({
       if (schema.action_name !== input.action) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Action mismatch: item grants "${schema.action_name}", not "${input.action}".` });
       }
-
-      // 5. Target tile count must match schema
-      if (input.targetTiles.length !== schema.targeting.count) {
+      if (tiles.length !== schema.targeting.count) {
         throw new TRPCError({
           code:    "BAD_REQUEST",
-          message: `Expected ${schema.targeting.count} target tile(s), got ${input.targetTiles.length}.`,
+          message: `Expected ${schema.targeting.count} target tile(s), got ${tiles.length}.`,
         });
       }
-
-      // 6. Each tile must be within max_range (Chebyshev from frog)
-      for (const tile of input.targetTiles) {
+      for (const tile of tiles) {
         const dist = chebyshevDistance(frog.gridX, frog.gridY, tile.x, tile.y);
         if (dist > schema.targeting.max_range) {
           throw new TRPCError({
@@ -561,14 +579,12 @@ export const adminRouter = router({
         }
       }
 
-      // 7. Poise gate — block if another action is still pending
       const inPoise = await hasPendingActionForFrog(input.frogId);
       if (inPoise) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Frog is in Poise — an action is already pending." });
       }
 
-      // 8. Queue with deferred resolveBucket based on cast_time_ms
-      const castBuckets  = Math.ceil(schema.cast_time_ms / 500);
+      const castBuckets   = Math.ceil(schema.cast_time_ms / 500);
       const resolveBucket = Math.floor(Date.now() / 500) + castBuckets;
 
       const action = await createPendingAction({
@@ -577,7 +593,7 @@ export const adminRouter = router({
         resolveBucket,
         payload: {
           itemId:      input.itemId,
-          targetTiles: input.targetTiles,
+          targetTiles: tiles,
         },
       });
 

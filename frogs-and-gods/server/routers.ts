@@ -178,6 +178,7 @@ export const appRouter = router({
           (item.statsJson.grantedActions ?? []).map((actionName) => ({
             actionName,
             itemId:       item.itemId,
+            itemName:     item.name,
             actionSchema: item.statsJson.actionSchema ?? null,
           })),
         );

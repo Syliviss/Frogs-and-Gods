@@ -5,6 +5,7 @@ import { CHUNK_SIZE } from "../utils/worldGenerator";
 import type { ValidationResult } from "./_types";
 import { pushActionLog } from "../engine/actionLog";
 import { chebyshevDistance } from "../../shared/movement";
+import { XP_REWARD_BY_ENEMY_TYPE, applyXpToFrog } from "../engine/xpDistributor";
 
 // ─────────────────────────────────────────────
 // SPATIAL UTILITIES
@@ -67,6 +68,7 @@ export function applyDamage(
     const newHp = Math.max(0, predator.currentHp - amount);
     if (newHp === 0) {
       dropPredatorLoot(predator, queue);
+      awardChunkXp(state, predator, queue);
       state.predators.delete(id);
       queue.push({ type: "PREDATOR_DELETE", id });
     } else {
@@ -92,6 +94,60 @@ export function dropPredatorLoot(predator: Predator, out: UpdateInstruction[]): 
         gridY:      predator.gridY,
         ownerId:    null,
         instanceId: predator.instanceId ?? null,
+      },
+    });
+  }
+}
+
+/**
+ * Award XP to every living frog in the same chunk (and same instance) as a
+ * dying predator. Call BEFORE removing the predator from state. Queues
+ * FROG_UPDATE + WORLD_LOG_INSERT instructions onto `out`. Each chunk-mate
+ * gets the full reward — no split, no party scaling.
+ *
+ * Pipeline death paths: applyDamage (frog combat), KILL_PREDATOR, DIV_SMITE_ENEMY.
+ * Starvation paths use `awardChunkXpDirect` in db.ts (outside the tick pipeline).
+ */
+export function awardChunkXp(
+  state: SimulatedState,
+  predator: Predator,
+  out: UpdateInstruction[]
+): void {
+  const reward = XP_REWARD_BY_ENEMY_TYPE[predator.enemyType] ?? 0;
+  if (reward <= 0) return;
+
+  const deathChunkX = Math.floor(predator.gridX / CHUNK_SIZE);
+  const deathChunkY = Math.floor(predator.gridY / CHUNK_SIZE);
+  const predInstance = predator.instanceId ?? null;
+
+  for (const frog of Array.from(state.frogs.values())) {
+    if (frog.isDead) continue;
+    if ((frog.instanceId ?? null) !== predInstance) continue;
+    if (Math.floor(frog.gridX / CHUNK_SIZE) !== deathChunkX) continue;
+    if (Math.floor(frog.gridY / CHUNK_SIZE) !== deathChunkY) continue;
+
+    const result = applyXpToFrog(frog.currentXp, frog.level, reward);
+    const changes = {
+      currentXp:     result.newCurrentXp,
+      level:         result.newLevel,
+      xpToNextLevel: result.newXpToNextLevel,
+    };
+    state.updateFrog(frog.id, changes);
+    out.push({ type: "FROG_UPDATE", id: frog.id, changes });
+
+    out.push({
+      type: "WORLD_LOG_INSERT",
+      data: {
+        frogId:    frog.id,
+        eventType: result.leveled ? "FROG_LEVEL_UP" : "FROG_XP_GAIN",
+        payload:   JSON.stringify({
+          amount:    reward,
+          enemyType: predator.enemyType,
+          newLevel:  result.newLevel,
+          leveled:   result.leveled,
+        }),
+        chunkX:    deathChunkX,
+        chunkY:    deathChunkY,
       },
     });
   }
@@ -157,6 +213,29 @@ export function rollConditionCheck(
     return { ok: false, code: "FUMBLE", message: `${frog.name} struggles against the snake's coils but cannot break free!` };
   }
 
+  // ── WRAPPED-BY-ITEM condition (e.g. FLING_CONSUME with consumeEffect "WRAPPED") ──
+  if (frog.statsJson?.wrappedByItem) {
+    const escapeRoll = Math.max(frog.statsJson.str, frog.statsJson.dex);
+
+    if (escapeRoll >= 15) {
+      const frogChanges = { statsJson: { ...frog.statsJson, wrappedByItem: null } };
+      state.updateFrog(frog.id, frogChanges);
+      out.push({ type: "FROG_UPDATE", id: frog.id, changes: frogChanges });
+
+      pushActionLog({
+        text:     `${frog.name} tears free of the binding!`,
+        x:        frog.gridX,
+        y:        frog.gridY,
+        chunk_id: `${Math.floor(frog.gridX / CHUNK_SIZE)}:${Math.floor(frog.gridY / CHUNK_SIZE)}`,
+        category: "combat",
+      });
+
+      return { ok: true };
+    }
+
+    return { ok: false, code: "FUMBLE", message: `${frog.name} thrashes against the binding but cannot break free!` };
+  }
+
   // ── Add future conditions here ──
 
   return { ok: true };
@@ -208,6 +287,11 @@ export function recalcEquippedBonuses(frogId: number, state: SimulatedState) {
     equippedWisBonus:     0,
     equippedIntBonus:     0,
     equippedChaBonus:     0,
+    equippedRangedDamageBonus:     0,
+    equippedRangedHitBonus:        0,
+    equippedRangedRangeBonus:      0,
+    equippedRangedBreathReduction: 0,
+    equippedRangedHitCount:        0,
   };
   for (const eq of equipped) {
     const s = eq.statsJson;
@@ -221,6 +305,11 @@ export function recalcEquippedBonuses(frogId: number, state: SimulatedState) {
     totals.equippedWisBonus     += s.wisBonus     ?? 0;
     totals.equippedIntBonus     += s.intBonus     ?? 0;
     totals.equippedChaBonus     += s.chaBonus     ?? 0;
+    totals.equippedRangedDamageBonus     += s.rangedDamageBonus     ?? 0;
+    totals.equippedRangedHitBonus        += s.rangedHitBonus        ?? 0;
+    totals.equippedRangedRangeBonus      += s.rangedRangeBonus      ?? 0;
+    totals.equippedRangedBreathReduction += s.rangedBreathReduction ?? 0;
+    totals.equippedRangedHitCount        += s.rangedHitCount        ?? 0;
   }
   return totals;
 }

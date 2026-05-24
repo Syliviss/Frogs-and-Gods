@@ -5,6 +5,7 @@ import {
   createPendingAction,
   updateItem,
   deletePredator,
+  awardChunkXpDirect,
 } from "../db";
 import { CHUNK_SIZE } from "../utils/worldGenerator";
 import type { Predator, Frog } from "../../drizzle/schema";
@@ -81,6 +82,7 @@ export async function calculateGolemIntent(predator: Predator): Promise<void> {
         instanceId: predator.instanceId ?? null,
       });
     }
+    await awardChunkXpDirect(predator);
     await deletePredator(predator.id);
     return;
   }

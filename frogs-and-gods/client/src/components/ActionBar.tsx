@@ -5,6 +5,7 @@ import type { ActionSchema, TileChar } from "../../../shared/game.schema";
 export interface EquippedActionEntry {
   actionName:    string;
   itemId:        string;
+  itemName:      string;
   actionSchema?: ActionSchema | null;
 }
 
@@ -157,20 +158,37 @@ export function ActionBar({
       {/* Item-granted actions — schema-driven; refreshed on each ENGINE_TICK */}
       {equippedActions.length > 0 && (
         <div className="flex gap-2 flex-wrap justify-center mt-1">
-          {equippedActions.map((entry) => (
-            <button
-              key={`${entry.itemId}-${entry.actionName}`}
-              onClick={() => onAction(entry.actionName, entry.itemId, entry.actionSchema)}
-              className="px-4 py-1.5 border border-purple-700 rounded text-xs font-bold font-serif hover:bg-purple-900/40 transition"
-            >
-              {entry.actionName}
-              {entry.actionSchema && (
-                <span className="text-gray-500 text-xs font-normal ml-1">
-                  ({entry.actionSchema.cast_time_ms / 1000}s)
-                </span>
-              )}
-            </button>
-          ))}
+          {equippedActions.map((entry) => {
+            const isFlingConsume = entry.actionName === "FLING_CONSUME";
+            const isFling        = entry.actionName === "FLING" || isFlingConsume;
+            return (
+              <button
+                key={`${entry.itemId}-${entry.actionName}`}
+                onClick={() => onAction(entry.actionName, entry.itemId, entry.actionSchema)}
+                className={`px-4 py-1.5 border rounded text-xs font-bold font-serif transition flex flex-col items-center leading-tight ${
+                  isFlingConsume
+                    ? "border-red-700 hover:bg-red-900/40"
+                    : "border-purple-700 hover:bg-purple-900/40"
+                }`}
+              >
+                {isFling ? (
+                  <>
+                    <span>Fling ({entry.itemName})</span>
+                    {isFlingConsume && <span className="text-red-400 text-[10px] font-normal">CONSUMED</span>}
+                  </>
+                ) : (
+                  <span>
+                    {entry.actionName}
+                    {entry.actionSchema && (
+                      <span className="text-gray-500 text-xs font-normal ml-1">
+                        ({entry.actionSchema.cast_time_ms / 1000}s)
+                      </span>
+                    )}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
 
