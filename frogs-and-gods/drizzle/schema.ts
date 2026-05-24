@@ -58,9 +58,16 @@ export interface FrogStats {
   cha:                 number;
   inventoryCapacity:   number;
   equipCapacity:       number;
-  equippedAttackBonus: number;
+  equippedAttackBonus:  number;
   equippedDefenseBonus: number;
-  equippedHpBonus:     number;
+  equippedHpBonus:      number;
+  equippedManaBonus:    number;
+  equippedBreathBonus:  number;
+  equippedStrBonus:     number;
+  equippedDexBonus:     number;
+  equippedWisBonus:     number;
+  equippedIntBonus:     number;
+  equippedChaBonus:     number;
   /** Predator id currently constricting this frog. Null or absent = free. */
   wrappedBy?: number | null;
 }
@@ -76,9 +83,16 @@ export const DEFAULT_FROG_STATS: FrogStats = {
   cha:                 10,
   inventoryCapacity:   6,
   equipCapacity:       3,
-  equippedAttackBonus: 0,
+  equippedAttackBonus:  0,
   equippedDefenseBonus: 0,
-  equippedHpBonus:     0,
+  equippedHpBonus:      0,
+  equippedManaBonus:    0,
+  equippedBreathBonus:  0,
+  equippedStrBonus:     0,
+  equippedDexBonus:     0,
+  equippedWisBonus:     0,
+  equippedIntBonus:     0,
+  equippedChaBonus:     0,
 };
 
 export const frogs = pgTable("frogs", {
@@ -206,6 +220,13 @@ export interface ItemStats {
   attackBonus?:    number;
   defenseBonus?:   number;
   hpBonus?:        number;
+  manaBonus?:      number;
+  breathBonus?:    number;
+  strBonus?:       number;
+  dexBonus?:       number;
+  wisBonus?:       number;
+  intBonus?:       number;
+  chaBonus?:       number;
   /** Actions this item grants when EQUIPPED (e.g. ["TONGUE_STRIKE", "DEVOUR"]) */
   grantedActions?: string[];
   /** Actions this item blocks in the frog's inventory (triggers Fumble) */

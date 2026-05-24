@@ -108,9 +108,16 @@ export const createFrogHandler: GodActionHandler = {
       cha:                 Math.max(1, base.cha      + (mods.cha     ?? 0)),
       inventoryCapacity:   6,
       equipCapacity:       3,
-      equippedAttackBonus: 0,
+      equippedAttackBonus:  0,
       equippedDefenseBonus: 0,
-      equippedHpBonus:     0,
+      equippedHpBonus:      0,
+      equippedManaBonus:    0,
+      equippedBreathBonus:  0,
+      equippedStrBonus:     0,
+      equippedDexBonus:     0,
+      equippedWisBonus:     0,
+      equippedIntBonus:     0,
+      equippedChaBonus:     0,
     };
 
     out.push({

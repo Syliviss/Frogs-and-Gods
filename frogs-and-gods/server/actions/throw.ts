@@ -2,7 +2,7 @@ import { pushActionLog } from "../engine/actionLog";
 import { chebyshevDistance } from "../../shared/movement";
 import type { ActionContext, ValidationResult, ExecuteResult, NotifyFn, ActionHandler } from "./_types";
 import { CHUNK_SIZE } from "../utils/worldGenerator";
-import { checkItemFumble } from "./_utils";
+import { checkItemFumble, recalcEquippedBonuses } from "./_utils";
 import type { SimulatedState, UpdateInstruction } from "../engine/types";
 
 const THROW_BASE_RANGE = 3;
@@ -55,21 +55,7 @@ export const throwHandler: ActionHandler = {
     }});
 
     if (wasEquipped) {
-      const remaining = Array.from(state.items.values()).filter(i => i.ownerId === frog.id && i.itemState === "EQUIPPED");
-      let attackBonus  = 0;
-      let defenseBonus = 0;
-      let hpBonus      = 0;
-      for (const eq of remaining) {
-        attackBonus  += eq.statsJson.attackBonus  ?? 0;
-        defenseBonus += eq.statsJson.defenseBonus ?? 0;
-        hpBonus      += eq.statsJson.hpBonus      ?? 0;
-      }
-      const newStats = {
-        ...frog.statsJson,
-        equippedAttackBonus:  attackBonus,
-        equippedDefenseBonus: defenseBonus,
-        equippedHpBonus:      hpBonus,
-      };
+      const newStats = { ...frog.statsJson, ...recalcEquippedBonuses(frog.id, state) };
       state.updateFrog(frog.id, { statsJson: newStats });
       out.push({ type: "FROG_UPDATE", id: frog.id, changes: { statsJson: newStats } });
     }

@@ -75,7 +75,9 @@ export const swingHandler: ActionHandler = {
   execute(ctx: ActionContext, state: SimulatedState, out: UpdateInstruction[]): ExecuteResult {
     const frog       = ctx.frog!;
     const rawTiles   = ctx.payload.targetTiles as { x: number; y: number }[];
-    const damage     = (frog.statsJson.str ?? 0) + (frog.statsJson.equippedAttackBonus ?? 0);
+    const damage     = (frog.statsJson.str ?? 0)
+                     + (frog.statsJson.equippedStrBonus ?? 0)
+                     + (frog.statsJson.equippedAttackBonus ?? 0);
     const damaged: DamageEntry[] = [];
 
     for (const tile of rawTiles) {

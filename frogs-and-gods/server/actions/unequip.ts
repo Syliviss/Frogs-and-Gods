@@ -2,7 +2,7 @@ import { pushActionLog } from "../engine/actionLog";
 import type { ActionContext, ValidationResult, ExecuteResult, NotifyFn, ActionHandler } from "./_types";
 import { EquipActionSchema } from "../../shared/game.schema";
 import { CHUNK_SIZE } from "../utils/worldGenerator";
-import { checkItemFumble } from "./_utils";
+import { checkItemFumble, recalcEquippedBonuses } from "./_utils";
 import type { SimulatedState, UpdateInstruction } from "../engine/types";
 
 export const unequipHandler: ActionHandler = {
@@ -34,22 +34,7 @@ export const unequipHandler: ActionHandler = {
     state.updateItem(itemId, { itemState: "INVENTORY" });
     out.push({ type: "ITEM_UPDATE", id: itemId, changes: { itemState: "INVENTORY" } });
 
-    const remaining = Array.from(state.items.values()).filter(i => i.ownerId === frog.id && i.itemState === "EQUIPPED");
-    let attackBonus  = 0;
-    let defenseBonus = 0;
-    let hpBonus      = 0;
-    for (const eq of remaining) {
-      attackBonus  += eq.statsJson.attackBonus  ?? 0;
-      defenseBonus += eq.statsJson.defenseBonus ?? 0;
-      hpBonus      += eq.statsJson.hpBonus      ?? 0;
-    }
-
-    const newStats = {
-      ...frog.statsJson,
-      equippedAttackBonus:  attackBonus,
-      equippedDefenseBonus: defenseBonus,
-      equippedHpBonus:      hpBonus,
-    };
+    const newStats = { ...frog.statsJson, ...recalcEquippedBonuses(frog.id, state) };
     state.updateFrog(frog.id, { statsJson: newStats });
     out.push({ type: "FROG_UPDATE", id: frog.id, changes: { statsJson: newStats } });
 

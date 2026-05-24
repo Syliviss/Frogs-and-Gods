@@ -9,7 +9,14 @@ const KNOWN_ACTIONS = [
   "THROW", "STORE_ITEM", "GIVE", "SWING", "PICKUP",
 ] as const;
 
-type Template = "swing" | "passive" | "custom";
+const BONUS_FIELDS = [
+  "attackBonus", "defenseBonus", "hpBonus", "manaBonus", "breathBonus",
+  "strBonus", "dexBonus", "wisBonus", "intBonus", "chaBonus",
+] as const;
+type BonusField = (typeof BONUS_FIELDS)[number];
+type Bonuses = Record<BonusField, number>;
+
+type Template = "item" | "custom";
 
 const INPUT_STYLE: React.CSSProperties = {
   background: "#060d18",
@@ -31,39 +38,51 @@ const LABEL_STYLE: React.CSSProperties = {
 const SECTION_STYLE: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 8,
+  gap: 12,
 };
 
 // ─────────────────────────────────────────────
-// BUILDERS
+// STATE & BUILDER
 // ─────────────────────────────────────────────
 
-interface SwingState {
-  attackBonus: number;
-  defenseBonus: number;
-  hpBonus: number;
-  blockedActions: string[];
-  castTimeMs: number;
-  targetingCount: number;
+interface ItemState {
+  bonuses:           Bonuses;
+  blockedActions:    string[];
+  grantsAction:      boolean;
+  actionName:        string;
+  castTimeMs:        number;
+  targetingCount:    number;
   adjacencyRequired: boolean;
-  maxRange: number;
+  maxRange:          number;
 }
 
-interface PassiveState {
-  attackBonus: number;
-  defenseBonus: number;
-  hpBonus: number;
-}
+const EMPTY_BONUSES: Bonuses = BONUS_FIELDS.reduce(
+  (acc, k) => ({ ...acc, [k]: 0 }),
+  {} as Bonuses,
+);
 
-function buildSwingStats(s: SwingState): object {
-  return {
-    attackBonus: s.attackBonus,
-    defenseBonus: s.defenseBonus,
-    hpBonus: s.hpBonus,
-    grantedActions: ["SWING"],
-    blockedActions: s.blockedActions,
-    actionSchema: {
-      action_name: "SWING",
+const DEFAULT_STATE: ItemState = {
+  bonuses:           { ...EMPTY_BONUSES },
+  blockedActions:    [],
+  grantsAction:      true,
+  actionName:        "SWING",
+  castTimeMs:        0,
+  targetingCount:    1,
+  adjacencyRequired: false,
+  maxRange:          1,
+};
+
+function buildItemStats(s: ItemState): object {
+  const out: Record<string, unknown> = {};
+  for (const k of BONUS_FIELDS) {
+    if (s.bonuses[k] !== 0) out[k] = s.bonuses[k];
+  }
+  if (s.blockedActions.length > 0) out.blockedActions = s.blockedActions;
+  if (s.grantsAction && s.actionName.trim() !== "") {
+    const name = s.actionName.trim();
+    out.grantedActions = [name];
+    out.actionSchema = {
+      action_name: name,
       cast_time_ms: s.castTimeMs,
       targeting: {
         type: "TILE_SELECT",
@@ -71,43 +90,30 @@ function buildSwingStats(s: SwingState): object {
         adjacency_required: s.adjacencyRequired,
         max_range: s.maxRange,
       },
-    },
-  };
+    };
+  }
+  return out;
 }
 
-function buildPassiveStats(s: PassiveState): object {
-  return {
-    attackBonus: s.attackBonus,
-    defenseBonus: s.defenseBonus,
-    hpBonus: s.hpBonus,
-  };
-}
-
-function tryParseSwing(json: string): Partial<SwingState> | null {
+function tryParseItem(json: string): Partial<ItemState> | null {
   try {
     const obj = JSON.parse(json);
+    const bonuses: Bonuses = { ...EMPTY_BONUSES };
+    for (const k of BONUS_FIELDS) {
+      if (typeof obj[k] === "number") bonuses[k] = obj[k];
+    }
+    const grantedActions = Array.isArray(obj.grantedActions) ? obj.grantedActions : [];
+    const grantsAction   = grantedActions.length > 0 || !!obj.actionSchema;
+    const actionName     = obj.actionSchema?.action_name ?? grantedActions[0] ?? "SWING";
     return {
-      attackBonus:       obj.attackBonus   ?? 0,
-      defenseBonus:      obj.defenseBonus  ?? 0,
-      hpBonus:           obj.hpBonus       ?? 0,
+      bonuses,
       blockedActions:    Array.isArray(obj.blockedActions) ? obj.blockedActions : [],
+      grantsAction,
+      actionName,
       castTimeMs:        obj.actionSchema?.cast_time_ms ?? 0,
       targetingCount:    obj.actionSchema?.targeting?.count ?? 1,
       adjacencyRequired: obj.actionSchema?.targeting?.adjacency_required ?? false,
       maxRange:          obj.actionSchema?.targeting?.max_range ?? 1,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function tryParsePassive(json: string): Partial<PassiveState> | null {
-  try {
-    const obj = JSON.parse(json);
-    return {
-      attackBonus:  obj.attackBonus  ?? 0,
-      defenseBonus: obj.defenseBonus ?? 0,
-      hpBonus:      obj.hpBonus      ?? 0,
     };
   } catch {
     return null;
@@ -182,29 +188,12 @@ interface ItemStatsFormProps {
 }
 
 export function ItemStatsForm({ value, onChange }: ItemStatsFormProps) {
-  const [template, setTemplate] = useState<Template>("swing");
-
-  const [swing, setSwing] = useState<SwingState>({
-    attackBonus: 0,
-    defenseBonus: 0,
-    hpBonus: 0,
-    blockedActions: [],
-    castTimeMs: 0,
-    targetingCount: 1,
-    adjacencyRequired: false,
-    maxRange: 1,
-  });
-
-  const [passive, setPassive] = useState<PassiveState>({
-    attackBonus: 0,
-    defenseBonus: 0,
-    hpBonus: 0,
-  });
+  const [template, setTemplate] = useState<Template>("item");
+  const [item, setItem] = useState<ItemState>(DEFAULT_STATE);
 
   // Derive the live preview object from current template + state
   const previewObj = (() => {
-    if (template === "swing")   return buildSwingStats(swing);
-    if (template === "passive") return buildPassiveStats(passive);
+    if (template === "item") return buildItemStats(item);
     try { return JSON.parse(value); } catch { return null; }
   })();
 
@@ -212,29 +201,29 @@ export function ItemStatsForm({ value, onChange }: ItemStatsFormProps) {
 
   // Push to parent whenever structured state changes
   useEffect(() => {
-    if (template === "swing")   onChange(JSON.stringify(buildSwingStats(swing)));
-    if (template === "passive") onChange(JSON.stringify(buildPassiveStats(passive)));
+    if (template === "item") onChange(JSON.stringify(buildItemStats(item)));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [template, swing, passive]);
+  }, [template, item]);
 
   const switchTemplate = useCallback((t: Template) => {
-    if (t === "swing") {
-      const parsed = tryParseSwing(value);
-      if (parsed) setSwing((prev) => ({ ...prev, ...parsed }));
-    } else if (t === "passive") {
-      const parsed = tryParsePassive(value);
-      if (parsed) setPassive((prev) => ({ ...prev, ...parsed }));
+    if (t === "item") {
+      const parsed = tryParseItem(value);
+      if (parsed) setItem((prev) => ({ ...prev, ...parsed }));
     }
     setTemplate(t);
   }, [value]);
 
   function toggleBlocked(action: string) {
-    setSwing((s) => ({
+    setItem((s) => ({
       ...s,
       blockedActions: s.blockedActions.includes(action)
         ? s.blockedActions.filter((a) => a !== action)
         : [...s.blockedActions, action],
     }));
+  }
+
+  function setBonus(field: BonusField, n: number) {
+    setItem((s) => ({ ...s, bonuses: { ...s.bonuses, [field]: n } }));
   }
 
   return (
@@ -244,27 +233,29 @@ export function ItemStatsForm({ value, onChange }: ItemStatsFormProps) {
       <div>
         <p style={LABEL_STYLE}>Item Template</p>
         <div style={{ display: "flex", gap: 6 }}>
-          <TemplateBtn label="Swing Weapon" active={template === "swing"}   onClick={() => switchTemplate("swing")} />
-          <TemplateBtn label="Passive Item" active={template === "passive"} onClick={() => switchTemplate("passive")} />
-          <TemplateBtn label="Custom JSON"  active={template === "custom"}  onClick={() => switchTemplate("custom")} />
+          <TemplateBtn label="Item"        active={template === "item"}   onClick={() => switchTemplate("item")} />
+          <TemplateBtn label="Custom JSON" active={template === "custom"} onClick={() => switchTemplate("custom")} />
         </div>
       </div>
 
-      {/* ── Swing Weapon fields ── */}
-      {template === "swing" && (
+      {/* ── Unified Item form ── */}
+      {template === "item" && (
         <div style={SECTION_STYLE}>
-          {/* Passive bonuses row */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-            <NumberField label="attackBonus"  value={swing.attackBonus}  onChange={(n) => setSwing((s) => ({ ...s, attackBonus: n }))} />
-            <NumberField label="defenseBonus" value={swing.defenseBonus} onChange={(n) => setSwing((s) => ({ ...s, defenseBonus: n }))} />
-            <NumberField label="hpBonus"      value={swing.hpBonus}      onChange={(n) => setSwing((s) => ({ ...s, hpBonus: n }))} />
-          </div>
 
-          {/* grantedActions locked label */}
+          {/* Passive bonuses grid */}
           <div>
-            <p style={LABEL_STYLE}>grantedActions</p>
-            <div style={{ ...INPUT_STYLE, color: "#4ade80", width: "auto", display: "inline-block" }}>
-              ["SWING"]
+            <p style={{ ...LABEL_STYLE, color: "#60a5fa", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Passive Bonuses
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8, paddingLeft: 8, borderLeft: "2px solid #1e2a3a" }}>
+              {BONUS_FIELDS.map((field) => (
+                <NumberField
+                  key={field}
+                  label={field}
+                  value={item.bonuses[field]}
+                  onChange={(n) => setBonus(field, n)}
+                />
+              ))}
             </div>
           </div>
 
@@ -276,11 +267,11 @@ export function ItemStatsForm({ value, onChange }: ItemStatsFormProps) {
                 <label key={action} style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
                   <input
                     type="checkbox"
-                    checked={swing.blockedActions.includes(action)}
+                    checked={item.blockedActions.includes(action)}
                     onChange={() => toggleBlocked(action)}
                     style={{ accentColor: "#f87171" }}
                   />
-                  <span style={{ fontSize: 11, color: swing.blockedActions.includes(action) ? "#f87171" : "#6b7280", fontFamily: "monospace" }}>
+                  <span style={{ fontSize: 11, color: item.blockedActions.includes(action) ? "#f87171" : "#6b7280", fontFamily: "monospace" }}>
                     {action}
                   </span>
                 </label>
@@ -288,56 +279,67 @@ export function ItemStatsForm({ value, onChange }: ItemStatsFormProps) {
             </div>
           </div>
 
-          {/* actionSchema fields */}
+          {/* Grants action toggle + action fields */}
           <div>
-            <p style={{ ...LABEL_STYLE, color: "#60a5fa", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-              actionSchema
-            </p>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, paddingLeft: 8, borderLeft: "2px solid #1e2a3a" }}>
-              <NumberField
-                label="cast_time_ms"
-                hint="0 = next sub-tick · 500 = 1 sub-tick delay"
-                value={swing.castTimeMs}
-                min={0}
-                onChange={(n) => setSwing((s) => ({ ...s, castTimeMs: n }))}
+            <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", marginBottom: 6 }}>
+              <input
+                type="checkbox"
+                checked={item.grantsAction}
+                onChange={(e) => setItem((s) => ({ ...s, grantsAction: e.target.checked }))}
+                style={{ accentColor: "#60a5fa" }}
               />
-              <NumberField
-                label="targeting.count"
-                hint="tiles player must click"
-                value={swing.targetingCount}
-                min={1}
-                onChange={(n) => setSwing((s) => ({ ...s, targetingCount: Math.max(1, n) }))}
-              />
-              <NumberField
-                label="targeting.max_range"
-                hint="Chebyshev dist · 1 = adjacent only"
-                value={swing.maxRange}
-                min={0}
-                onChange={(n) => setSwing((s) => ({ ...s, maxRange: Math.max(0, n) }))}
-              />
-              <div>
-                <p style={LABEL_STYLE}>targeting.adjacency_required <span style={{ color: "#4b5563" }}>UI hint only</span></p>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={swing.adjacencyRequired}
-                    onChange={(e) => setSwing((s) => ({ ...s, adjacencyRequired: e.target.checked }))}
-                    style={{ accentColor: "#60a5fa" }}
-                  />
-                  <span style={{ fontSize: 11, color: "#9ca3af" }}>require adjacency</span>
-                </label>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+              <span style={{ ...LABEL_STYLE, marginBottom: 0, color: "#60a5fa", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                Grants an action
+              </span>
+            </label>
 
-      {/* ── Passive Item fields ── */}
-      {template === "passive" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-          <NumberField label="attackBonus"  value={passive.attackBonus}  onChange={(n) => setPassive((s) => ({ ...s, attackBonus: n }))} />
-          <NumberField label="defenseBonus" value={passive.defenseBonus} onChange={(n) => setPassive((s) => ({ ...s, defenseBonus: n }))} />
-          <NumberField label="hpBonus"      value={passive.hpBonus}      onChange={(n) => setPassive((s) => ({ ...s, hpBonus: n }))} />
+            {item.grantsAction && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, paddingLeft: 8, borderLeft: "2px solid #1e2a3a" }}>
+                <div>
+                  <p style={LABEL_STYLE}>action_name <span style={{ color: "#4b5563" }}>e.g. SWING, SPIT, CAST</span></p>
+                  <input
+                    type="text"
+                    value={item.actionName}
+                    onChange={(e) => setItem((s) => ({ ...s, actionName: e.target.value.toUpperCase() }))}
+                    style={{ ...INPUT_STYLE, fontFamily: "monospace" }}
+                  />
+                </div>
+                <NumberField
+                  label="cast_time_ms"
+                  hint="0 = next sub-tick · 500 = 1 sub-tick delay"
+                  value={item.castTimeMs}
+                  min={0}
+                  onChange={(n) => setItem((s) => ({ ...s, castTimeMs: n }))}
+                />
+                <NumberField
+                  label="targeting.count"
+                  hint="tiles player must click"
+                  value={item.targetingCount}
+                  min={1}
+                  onChange={(n) => setItem((s) => ({ ...s, targetingCount: Math.max(1, n) }))}
+                />
+                <NumberField
+                  label="targeting.max_range"
+                  hint="Chebyshev dist · 1 = adjacent only"
+                  value={item.maxRange}
+                  min={0}
+                  onChange={(n) => setItem((s) => ({ ...s, maxRange: Math.max(0, n) }))}
+                />
+                <div>
+                  <p style={LABEL_STYLE}>targeting.adjacency_required <span style={{ color: "#4b5563" }}>UI hint only</span></p>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={item.adjacencyRequired}
+                      onChange={(e) => setItem((s) => ({ ...s, adjacencyRequired: e.target.checked }))}
+                      style={{ accentColor: "#60a5fa" }}
+                    />
+                    <span style={{ fontSize: 11, color: "#9ca3af" }}>require adjacency</span>
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

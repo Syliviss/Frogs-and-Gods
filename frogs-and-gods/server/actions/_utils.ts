@@ -193,6 +193,38 @@ export function isGolemTile(state: SimulatedState, x: number, y: number): boolea
 // ITEM & FUMBLE UTILITIES
 // ─────────────────────────────────────────────
 
+export function recalcEquippedBonuses(frogId: number, state: SimulatedState) {
+  const equipped = Array.from(state.items.values())
+    .filter(i => i.ownerId === frogId && i.itemState === "EQUIPPED");
+
+  const totals = {
+    equippedAttackBonus:  0,
+    equippedDefenseBonus: 0,
+    equippedHpBonus:      0,
+    equippedManaBonus:    0,
+    equippedBreathBonus:  0,
+    equippedStrBonus:     0,
+    equippedDexBonus:     0,
+    equippedWisBonus:     0,
+    equippedIntBonus:     0,
+    equippedChaBonus:     0,
+  };
+  for (const eq of equipped) {
+    const s = eq.statsJson;
+    totals.equippedAttackBonus  += s.attackBonus  ?? 0;
+    totals.equippedDefenseBonus += s.defenseBonus ?? 0;
+    totals.equippedHpBonus      += s.hpBonus      ?? 0;
+    totals.equippedManaBonus    += s.manaBonus    ?? 0;
+    totals.equippedBreathBonus  += s.breathBonus  ?? 0;
+    totals.equippedStrBonus     += s.strBonus     ?? 0;
+    totals.equippedDexBonus     += s.dexBonus     ?? 0;
+    totals.equippedWisBonus     += s.wisBonus     ?? 0;
+    totals.equippedIntBonus     += s.intBonus     ?? 0;
+    totals.equippedChaBonus     += s.chaBonus     ?? 0;
+  }
+  return totals;
+}
+
 export function checkItemFumble(
   frogId: number,
   actionType: string,

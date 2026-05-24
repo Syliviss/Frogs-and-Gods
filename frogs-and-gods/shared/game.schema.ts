@@ -233,6 +233,13 @@ export const ItemStatsSchema = z.object({
   attackBonus:    z.number().int().optional(),
   defenseBonus:   z.number().int().optional(),
   hpBonus:        z.number().int().optional(),
+  manaBonus:      z.number().int().optional(),
+  breathBonus:    z.number().int().optional(),
+  strBonus:       z.number().int().optional(),
+  dexBonus:       z.number().int().optional(),
+  wisBonus:       z.number().int().optional(),
+  intBonus:       z.number().int().optional(),
+  chaBonus:       z.number().int().optional(),
   /** Actions this item grants when EQUIPPED */
   grantedActions: z.array(z.string()).optional(),
   /** Actions this item blocks (triggers Fumble) while in frog's inventory */

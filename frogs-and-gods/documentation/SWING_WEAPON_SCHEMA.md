@@ -18,7 +18,7 @@
    { "itemId": "<uuid>", "targetTiles": [{ "x": 3, "y": 7 }, ...] }
    ```
 4. The server resolves SWING: each target tile is checked for frogs and predators, and
-   **`damage = frog.str + frog.equippedAttackBonus`** is applied to everything standing there.
+   **`damage = frog.str + frog.equippedStrBonus + frog.equippedAttackBonus`** is applied to everything standing there.
 5. A single entity on two target tiles takes damage **twice** (intentional multi-hit).
 
 ---
@@ -29,8 +29,15 @@
 {
   // ── Passive stat bonuses (applied when equipped, summed across all equipped items) ──
   "attackBonus":  5,        // integer — added to frog.equippedAttackBonus
-  "defenseBonus": 0,        // integer — added to frog.equippedDefenseBonus (currently unused in combat math)
-  "hpBonus":      0,        // integer — added to frog.equippedHpBonus (currently unused in combat math)
+  "defenseBonus": 0,        // integer — added to frog.equippedDefenseBonus (reserved)
+  "hpBonus":      0,        // integer — added to frog.equippedHpBonus (boosts effective maxHp; reserved)
+  "manaBonus":    0,        // integer — added to frog.equippedManaBonus (reserved)
+  "breathBonus":  0,        // integer — added to frog.equippedBreathBonus (reserved)
+  "strBonus":     0,        // integer — added to frog.equippedStrBonus (read by SWING damage formula)
+  "dexBonus":     0,        // integer — added to frog.equippedDexBonus (reserved)
+  "wisBonus":     0,        // integer — added to frog.equippedWisBonus (reserved)
+  "intBonus":     0,        // integer — added to frog.equippedIntBonus (reserved)
+  "chaBonus":     0,        // integer — added to frog.equippedChaBonus (reserved)
 
   // ── Action grants (which action buttons appear in the UI when this item is equipped) ──
   "grantedActions": ["SWING"],   // Must match an ACTION_REGISTRY key exactly
@@ -58,11 +65,20 @@
 
 ### Passive Bonuses
 
+All ten bonus fields are optional. Each one is summed across every EQUIPPED item the frog carries and the running total is written to the matching `frog.statsJson.equipped*Bonus` field on EQUIP/UNEQUIP/THROW (via `recalcEquippedBonuses` in `server/actions/_utils.ts`).
+
 | Field | Type | Notes |
 |---|---|---|
-| `attackBonus` | `integer` | Summed across all equipped items → `frog.equippedAttackBonus`. **This is the primary damage modifier for SWING** (`damage = str + equippedAttackBonus`). |
-| `defenseBonus` | `integer` | Summed and stored on frog but not currently read by any attack handler. Reserved. |
-| `hpBonus` | `integer` | Summed and stored on frog but not currently applied to `currentHp`. Reserved. |
+| `attackBonus` | `integer` | → `equippedAttackBonus`. Primary damage modifier for SWING. |
+| `defenseBonus` | `integer` | → `equippedDefenseBonus`. Reserved — not currently read in combat. |
+| `hpBonus` | `integer` | → `equippedHpBonus`. Boosts effective max HP (currentHp is not auto-raised on equip). |
+| `manaBonus` | `integer` | → `equippedManaBonus`. Boosts effective max mana. Reserved. |
+| `breathBonus` | `integer` | → `equippedBreathBonus`. Boosts effective max breath. Reserved. |
+| `strBonus` | `integer` | → `equippedStrBonus`. **Read by SWING damage formula** (`damage = str + equippedStrBonus + equippedAttackBonus`). |
+| `dexBonus` | `integer` | → `equippedDexBonus`. Reserved. |
+| `wisBonus` | `integer` | → `equippedWisBonus`. Reserved. |
+| `intBonus` | `integer` | → `equippedIntBonus`. Reserved. |
+| `chaBonus` | `integer` | → `equippedChaBonus`. Reserved. |
 
 ### `grantedActions`
 
@@ -167,16 +183,19 @@ This is the most critical field for SWING. It is validated server-side by Zod's 
 ## 5. Damage Formula
 
 ```
-damage = frog.statsJson.str + frog.statsJson.equippedAttackBonus
+damage = frog.statsJson.str
+       + frog.statsJson.equippedStrBonus
+       + frog.statsJson.equippedAttackBonus
 ```
 
 - `frog.statsJson.str` — the frog's base strength stat (default: `10`)
+- `frog.statsJson.equippedStrBonus` — sum of `strBonus` across all currently EQUIPPED items
 - `frog.statsJson.equippedAttackBonus` — sum of `attackBonus` across all currently EQUIPPED items
 
-`attackBonus` on the weapon itself is included in `equippedAttackBonus` only **after the frog equips it** — the equip handler recalculates and writes the sum back to `frog.statsJson`.
+Both bonus totals are recalculated by `recalcEquippedBonuses()` on EQUIP/UNEQUIP/THROW and written back to `frog.statsJson`.
 
-**There is no weapon-specific damage roll.** All SWING weapons deal the same `str + equippedAttackBonus` per tile hit. Differentiation comes from:
-- `attackBonus` (flat damage buff)
+**There is no weapon-specific damage roll.** All SWING weapons share the same formula per tile hit. Differentiation comes from:
+- `attackBonus` and `strBonus` (flat damage buffs)
 - `targeting.count` (how many tiles = how many potential hits)
 - `targeting.max_range` (reach)
 - `cast_time_ms` (when in the sub-tick the action resolves — faster snakes may dodge a slow swing)
